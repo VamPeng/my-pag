@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -272,6 +273,70 @@ class ApiIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(1))
                 .andExpect(jsonPath("$[0].id").value(workItemId));
+    }
+
+    @Test
+    void inboxViewShouldReturnOnlyUnclassifiedAndNotTrashedItems() throws Exception {
+        String workId = createDirectory("工作", null);
+        String inboxItemId = createItem("收件箱事项", null, "todo", "medium", Instant.now().toString());
+        createItem("目录事项", workId, "todo", "medium", Instant.now().toString());
+        String trashedId = createItem("回收站事项", null, "todo", "medium", Instant.now().toString());
+
+        mockMvc.perform(post("/api/items/{id}/trash", trashedId))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/views/inbox"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(inboxItemId));
+    }
+
+    @Test
+    void todayViewShouldReturnOnlyItemsExpectedToday() throws Exception {
+        Instant now = Instant.now();
+        String todayItemId = createItem("今天要做", null, "doing", "high", now.toString());
+        createItem("明天事项", null, "todo", "medium", now.plusSeconds(24 * 3600).toString());
+        createItem("昨天事项", null, "todo", "medium", now.minusSeconds(24 * 3600).toString());
+
+        mockMvc.perform(get("/api/views/today"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(todayItemId));
+    }
+
+    @Test
+    void upcomingViewShouldUseSettingsRange() throws Exception {
+        mockMvc.perform(patch("/api/settings")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "recentRangeValue": 2,
+                                  "recentRangeUnit": "day"
+                                }
+                                """))
+                .andExpect(status().isOk());
+
+        Instant now = Instant.now();
+        String inRangeId = createItem("两天内事项", null, "todo", "medium", now.plusSeconds(24 * 3600).toString());
+        createItem("两天外事项", null, "todo", "medium", now.plusSeconds(4 * 24 * 3600).toString());
+
+        mockMvc.perform(get("/api/views/upcoming"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(inRangeId));
+    }
+
+    @Test
+    void overdueViewShouldExcludeDoneItems() throws Exception {
+        Instant now = Instant.now();
+        String overdueTodoId = createItem("逾期待处理", null, "doing", "high", now.minusSeconds(24 * 3600).toString());
+        createItem("逾期但已完成", null, "done", "medium", now.minusSeconds(24 * 3600).toString());
+        createItem("未来事项", null, "todo", "medium", now.plusSeconds(24 * 3600).toString());
+
+        mockMvc.perform(get("/api/views/overdue"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(overdueTodoId));
     }
 
     private String createDirectory(String name, String parentId) throws Exception {
