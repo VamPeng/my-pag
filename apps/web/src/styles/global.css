@@ -93,6 +93,12 @@ button {
   background: rgba(236, 225, 205, 0.55);
 }
 
+.nav-list__item {
+  width: 100%;
+  border: none;
+  text-align: left;
+}
+
 .nav-list__item.is-active {
   background: #d7853b;
   color: #fff8ef;
@@ -159,10 +165,15 @@ button {
   background: #fffaf2;
   border: 1px solid rgba(28, 25, 21, 0.08);
   box-shadow: 0 12px 24px rgba(64, 42, 17, 0.06);
+  cursor: pointer;
 }
 
 .card--done {
   opacity: 0.55;
+}
+
+.card--active {
+  border-color: rgba(215, 133, 59, 0.7);
 }
 
 .card h3 {
@@ -175,8 +186,21 @@ button {
   color: #7f7365;
 }
 
+.card__complete {
+  margin-top: 10px;
+  border: none;
+  border-radius: 999px;
+  background: #d7853b;
+  color: #fff8ef;
+  padding: 6px 12px;
+}
+
 .quick-create {
   margin-top: auto;
+}
+
+.quick-create form {
+  margin: 0;
 }
 
 .quick-create input,
@@ -206,6 +230,16 @@ button {
   flex-direction: column;
   gap: 8px;
   color: #5f564d;
+}
+
+.detail__header button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.error-message {
+  color: #9f2d20;
+  margin: 8px 0 0;
 }
 
 @media (max-width: 1100px) {
