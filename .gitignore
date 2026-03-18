@@ -13,3 +13,4 @@ out/
 .env.*
 apps/server/data/
 *.tsbuildinfo
+.worktrees/
