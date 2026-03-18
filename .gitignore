@@ -1,1 +1,15 @@
 .DS_Store
+.idea/
+node_modules/
+dist/
+build/
+.gradle/
+out/
+*.log
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+apps/server/data/
+*.tsbuildinfo

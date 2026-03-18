@@ -64,6 +64,8 @@ If new ideas appear during discussion, treat them as later-iteration candidates 
 - Keep requirement decisions concrete and scoped to V1 unless discussing future evolution explicitly.
 - When implementation starts, align code and technical choices with the current requirements directory.
 - If a technical decision conflicts with the current requirements, update the requirement docs first or explicitly record the conflict.
+- If `superpowers` is available in the environment, use it as a workflow aid, not as a replacement for this repository's source-of-truth documents.
+- Reference `docs/superpowers-usage.md` for the repository-specific way to use `superpowers`.
 
 ## Document Sync Rule
 

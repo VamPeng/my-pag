@@ -1,0 +1,17 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: my-pag-server
+  datasource:
+    url: jdbc:sqlite:${MY_PAG_DB_PATH:/tmp/my-pag/my-pag.db}
+    driver-class-name: org.sqlite.JDBC
+  jackson:
+    time-zone: Asia/Shanghai
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
