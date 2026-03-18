@@ -2,7 +2,7 @@
 
 ## 推荐部署形态
 
-推荐将服务部署在用户自己的 Linux 设备上。
+推荐将服务部署在用户自己的 Ubuntu 笔记本上。
 
 部署目标：
 
@@ -15,20 +15,20 @@
 建议固定以下角色：
 
 - Mac：开发机，负责写代码、调试和联调验证
-- Linux：部署机，负责运行正式后端服务和本地数据库
+- Ubuntu 笔记本：部署机，负责运行正式后端服务和本地数据库
 - Windows / 公司电脑 / 其他设备：客户端，仅通过浏览器访问服务
 
 说明：
 
 - 开发阶段可以先在 Mac 上验证前后端运行
-- 最终正式数据应只保存在 Linux 设备上
+- 最终正式数据应只保存在 Ubuntu 笔记本上
 - 客户端不保存主数据，也不直接连接数据库
 
 ## 推荐部署结构
 
 ### 宿主机
 
-- Linux
+- Ubuntu
 - Tailscale
 - Docker Engine
 - Docker Compose
@@ -43,7 +43,7 @@
 - SQLite 数据文件通过宿主机目录挂载持久化
 - SQLite 数据文件建议保存在独立数据目录中，避免与代码目录混放
 - 开发阶段可以先在 Mac 上运行应用服务进行验证
-- 正式部署阶段再将服务迁移到 Linux 设备长期运行
+- 正式部署阶段再将服务迁移到 Ubuntu 笔记本长期运行
 
 ## 访问路径
 
@@ -53,7 +53,7 @@
 Phone / Other Laptop
   -> Tailscale network
   -> Tailscale Serve or direct tailnet access
-  -> Linux host
+  -> Ubuntu laptop
   -> app service
   -> SQLite file
 ```
@@ -65,7 +65,7 @@ Phone / Other Laptop
 - 保持宿主机自动启动应用服务
 - 为 Tailscale 设备访问设置最小必要范围
 - 将 SQLite 数据文件放在例如 `/home/<user>/.local/share/my-pag/` 这类独立目录中
-- 在 Linux 设备上固定部署目录和数据目录，避免和开发目录混用
+- 在 Ubuntu 笔记本上固定部署目录和数据目录，避免和开发目录混用
 
 ## 当前不推荐做法
 
