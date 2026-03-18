@@ -10,6 +10,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 
 import org.junit.jupiter.api.AfterAll;
@@ -174,6 +176,104 @@ class ApiIntegrationTest {
                 .andExpect(jsonPath("$.directories[0].children[0].name").value("B 项目"));
     }
 
+    @Test
+    void itemsApisShouldCreateGetPatchAndMoveDirectory() throws Exception {
+        String workId = createDirectory("工作", null);
+        String lifeId = createDirectory("生活", null);
+
+        String itemId = createItem("和同事确认接口字段", workId, "doing", "high", "2026-03-20T10:00:00Z");
+
+        mockMvc.perform(get("/api/items/{id}", itemId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(itemId))
+                .andExpect(jsonPath("$.title").value("和同事确认接口字段"))
+                .andExpect(jsonPath("$.directoryId").value(workId))
+                .andExpect(jsonPath("$.progress").value("doing"))
+                .andExpect(jsonPath("$.priority").value("high"));
+
+        mockMvc.perform(patch("/api/items/{id}", itemId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "title": "和同事确认接口字段（已更新）",
+                                  "directoryId": "%s",
+                                  "progress": "todo"
+                                }
+                                """.formatted(lifeId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(itemId))
+                .andExpect(jsonPath("$.title").value("和同事确认接口字段（已更新）"))
+                .andExpect(jsonPath("$.directoryId").value(lifeId))
+                .andExpect(jsonPath("$.progress").value("todo"));
+    }
+
+    @Test
+    void completeItemThenPatchToDoingShouldClearCompletedAt() throws Exception {
+        String itemId = createItem("整理发布清单", null, "todo", "medium", null);
+
+        mockMvc.perform(post("/api/items/{id}/complete", itemId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.progress").value("done"))
+                .andExpect(jsonPath("$.completedAt").isNotEmpty());
+
+        mockMvc.perform(patch("/api/items/{id}", itemId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "progress": "doing"
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.progress").value("doing"))
+                .andExpect(jsonPath("$.completedAt").isEmpty());
+    }
+
+    @Test
+    void trashAndRestoreItemShouldToggleTrashedAt() throws Exception {
+        String itemId = createItem("收纳物品", null, "todo", "low", null);
+
+        mockMvc.perform(post("/api/items/{id}/trash", itemId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.trashedAt").isNotEmpty());
+
+        mockMvc.perform(post("/api/items/{id}/restore", itemId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.trashedAt").isEmpty());
+    }
+
+    @Test
+    void listItemsShouldSupportBasicFiltersAndExcludeTrashedByDefault() throws Exception {
+        String workId = createDirectory("工作", null);
+        String lifeId = createDirectory("生活", null);
+
+        String workItemId = createItem("确认发布窗口", workId, "doing", "high", "2026-03-20T10:00:00Z");
+        String lifeItemId = createItem("采购清单", lifeId, "todo", "low", "2026-03-22T10:00:00Z");
+        String trashedId = createItem("临时事项", workId, "paused", "medium", null);
+
+        mockMvc.perform(post("/api/items/{id}/trash", trashedId))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/items").param("q", "确认"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(workItemId));
+
+        mockMvc.perform(get("/api/items").param("progress", "todo"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(lifeItemId));
+
+        mockMvc.perform(get("/api/items").param("priority", "high"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(workItemId));
+
+        mockMvc.perform(get("/api/items").param("directoryId", workId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(workItemId));
+    }
+
     private String createDirectory(String name, String parentId) throws Exception {
         String payload = parentId == null
                 ? """
@@ -191,6 +291,38 @@ class ApiIntegrationTest {
         MvcResult result = mockMvc.perform(post("/api/directories")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(payload))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        JsonNode node = objectMapper.readTree(result.getResponse().getContentAsString());
+        return node.path("id").asText();
+    }
+
+    private String createItem(
+            String title,
+            String directoryId,
+            String progress,
+            String priority,
+            String expectedAt
+    ) throws Exception {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("title", title);
+        if (directoryId != null) {
+            payload.put("directoryId", directoryId);
+        }
+        if (progress != null) {
+            payload.put("progress", progress);
+        }
+        if (priority != null) {
+            payload.put("priority", priority);
+        }
+        if (expectedAt != null) {
+            payload.put("expectedAt", expectedAt);
+        }
+
+        MvcResult result = mockMvc.perform(post("/api/items")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(payload)))
                 .andExpect(status().isCreated())
                 .andReturn();
 
