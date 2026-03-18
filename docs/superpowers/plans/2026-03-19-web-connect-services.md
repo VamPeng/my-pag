@@ -42,7 +42,7 @@ Expected: build success
 Run: `GRADLE_USER_HOME=/Users/yuhuipeng/Desktop/pro/webP/my-pag/apps/server/.gradle ./gradlew test`
 Expected: `BUILD SUCCESSFUL`
 
-- [ ] **Step 3: Mark checkboxes and commit**
+- [x] **Step 3: Mark checkboxes and commit**
 ```bash
 git add apps/web docs/superpowers/plans/2026-03-19-web-connect-services.md
 git commit -m "feat: connect web app to backend services"
