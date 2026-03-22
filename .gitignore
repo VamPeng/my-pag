@@ -14,3 +14,4 @@ out/
 apps/server/data/
 *.tsbuildinfo
 .worktrees/
+.claude/
