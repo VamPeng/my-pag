@@ -224,13 +224,9 @@ export function App() {
   const activeViewLabel = useMemo(() => {
     const parts: string[] = [];
     if (timeFilter) parts.push(SMART_VIEW_LABELS[timeFilter]);
-    if (dirFilter) {
-      if (dirFilter.type === 'unclassified') {
-        parts.push('全部');
-      } else if (bootstrap) {
-        const namePath = findDirNamePath(bootstrap.directories, dirFilter.id);
-        if (namePath) parts.push(...namePath);
-      }
+    if (dirFilter?.type === 'directory' && bootstrap) {
+      const namePath = findDirNamePath(bootstrap.directories, dirFilter.id);
+      if (namePath) parts.push(...namePath);
     }
     return parts.length > 0 ? parts.join(' · ') : '全部';
   }, [timeFilter, dirFilter, bootstrap]);
@@ -245,6 +241,7 @@ export function App() {
       const newItem = await createItem({
         title: quickTitle.trim(),
         directoryId: dirFilter?.type === 'directory' ? dirFilter.id : null,
+        expectedAt: new Date().toISOString(),
       });
       setItems((prev) => [newItem, ...prev]);
       void refreshBootstrap();
@@ -508,15 +505,10 @@ export function App() {
             <li>
               <button
                 type="button"
-                className={`nav-list__item${dirFilter?.type === 'unclassified' ? ' is-active' : ''}`}
-                onClick={() => handleDirFilterClick({ type: 'unclassified' })}
+                className={`nav-list__item${dirFilter === null ? ' is-active' : ''}`}
+                onClick={() => { setDirFilter(null); setExpandedDirs(new Set()); }}
               >
-                <span>
-                  全部
-                  {(bootstrap?.unclassifiedCount ?? 0) > 0 && (
-                    <span className="dir-inline-count">({bootstrap?.unclassifiedCount})</span>
-                  )}
-                </span>
+                <span>全部</span>
               </button>
             </li>
             {bootstrap ? renderDirNodes(bootstrap.directories, 0) : null}

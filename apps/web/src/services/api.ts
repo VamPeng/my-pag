@@ -50,7 +50,7 @@ export async function getViewItems(view: SmartViewKey) {
   return requestJson<ItemSummary[]>(`/api/views/${view}`);
 }
 
-export async function createItem(payload: { title: string; directoryId?: string | null }) {
+export async function createItem(payload: { title: string; directoryId?: string | null; expectedAt?: string | null }) {
   return requestJson<ItemSummary>('/api/items', {
     method: 'POST',
     body: JSON.stringify(payload),
