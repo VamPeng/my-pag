@@ -49,6 +49,15 @@ function findPathToDir(nodes: DirectoryNode[], targetId: string): string[] | nul
   return null;
 }
 
+function findDirNamePath(nodes: DirectoryNode[], targetId: string): string[] | null {
+  for (const node of nodes) {
+    if (node.id === targetId) return [node.name];
+    const childPath = findDirNamePath(node.children, targetId);
+    if (childPath) return [node.name, ...childPath];
+  }
+  return null;
+}
+
 function dirFilterEquals(a: DirFilter | null, b: DirFilter | null): boolean {
   if (a === null && b === null) return true;
   if (a === null || b === null) return false;
@@ -211,18 +220,19 @@ export function App() {
     ? `${bootstrap.settings.recentRangeValue}${bootstrap.settings.recentRangeUnit === 'day' ? '天' : '周'}`
     : '';
 
-  // 头部标题：组合显示时间+目录筛选状态
+  // 头部标题：时间 · 根目录 · 子目录 · ... · 当前目录
   const activeViewLabel = useMemo(() => {
-    const timePart = timeFilter ? SMART_VIEW_LABELS[timeFilter] : null;
-    let dirPart: string | null = null;
+    const parts: string[] = [];
+    if (timeFilter) parts.push(SMART_VIEW_LABELS[timeFilter]);
     if (dirFilter) {
-      if (dirFilter.type === 'unclassified') dirPart = '全部';
-      else dirPart = bootstrap ? findDirName(bootstrap.directories, dirFilter.id) : '';
+      if (dirFilter.type === 'unclassified') {
+        parts.push('全部');
+      } else if (bootstrap) {
+        const namePath = findDirNamePath(bootstrap.directories, dirFilter.id);
+        if (namePath) parts.push(...namePath);
+      }
     }
-    if (timePart && dirPart) return `${timePart} · ${dirPart}`;
-    if (timePart) return timePart;
-    if (dirPart) return dirPart;
-    return '全部';
+    return parts.length > 0 ? parts.join(' · ') : '全部';
   }, [timeFilter, dirFilter, bootstrap]);
 
   // ── quick create handler ───────────────────────────────────────────────────
