@@ -21,6 +21,16 @@ import {
 const VIEW_ORDER: SmartViewKey[] = ['today', 'upcoming', 'overdue'];
 const IS_MAC = navigator.platform.startsWith('Mac');
 
+const DIR_COLORS = [
+  '#ef5350', '#ec407a', '#ab47bc', '#7e57c2',
+  '#42a5f5', '#26c6da', '#26a69a', '#66bb6a',
+  '#d4e157', '#ffa726', '#ff7043', '#8d6e63',
+];
+
+function randomDirColor(): string {
+  return DIR_COLORS[Math.floor(Math.random() * DIR_COLORS.length)];
+}
+
 function findDirName(nodes: DirectoryNode[], id: string): string {
   for (const node of nodes) {
     if (node.id === id) return node.name;
@@ -318,9 +328,10 @@ export function App() {
   async function handleConfirmAddDir() {
     if (!newDirName.trim()) return;
     const parentId = dirFilter?.type === 'directory' ? dirFilter.id : null;
+    const color = parentId === null ? randomDirColor() : null;
     try {
       setIsCreatingDir(true);
-      await createDirectory({ name: newDirName.trim(), parentId });
+      await createDirectory({ name: newDirName.trim(), parentId, color });
       setIsAddingDir(false);
       setNewDirName('');
       await refreshBootstrap();

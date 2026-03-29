@@ -29,7 +29,7 @@ public class DirectoryService {
     public List<DirectoryNode> getTree() {
         String accountId = currentAccountService.ensureCurrentAccount().id();
         List<DirectoryRepository.DirectoryRecord> records = directoryRepository.findAllActiveByAccountId(accountId);
-        return buildTree(records);
+        return buildTree(accountId, records);
     }
 
     @Transactional
@@ -46,9 +46,10 @@ public class DirectoryService {
                 accountId,
                 request.parentId(),
                 request.name().trim(),
-                sortOrder
+                sortOrder,
+                request.color()
         );
-        return toNode(created, List.of());
+        return toNode(created, List.of(), 0);
     }
 
     @Transactional
@@ -57,7 +58,30 @@ public class DirectoryService {
         validateName(request.name());
 
         return directoryRepository.rename(accountId, directoryId, request.name().trim())
-                .map(record -> toNode(record, List.of()))
+                .map(record -> toNode(record, List.of(), directoryRepository.countActiveItems(accountId, record.id())))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "directory not found"));
+    }
+
+    @Transactional(readOnly = true)
+    public List<DirectoryItemResponse> getItems(String directoryId) {
+        String accountId = currentAccountService.ensureCurrentAccount().id();
+        List<String> subtreeIds = directoryRepository.findActiveSubtreeIds(accountId, directoryId);
+        if (subtreeIds.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "directory not found");
+        }
+        return directoryRepository.findItemsBySubtree(accountId, subtreeIds).stream()
+                .map(r -> new DirectoryItemResponse(
+                        r.id(), r.directoryId(), r.title(), r.notes(), r.progress(),
+                        r.priority(), r.expectedAt(), r.completedAt(), r.trashedAt(),
+                        r.createdAt(), r.updatedAt()))
+                .toList();
+    }
+
+    @Transactional
+    public DirectoryNode updateColor(String directoryId, UpdateColorRequest request) {
+        String accountId = currentAccountService.ensureCurrentAccount().id();
+        return directoryRepository.updateColor(accountId, directoryId, request.color())
+                .map(record -> toNode(record, List.of(), directoryRepository.countActiveItems(accountId, record.id())))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "directory not found"));
     }
 
@@ -66,10 +90,10 @@ public class DirectoryService {
         String accountId = currentAccountService.ensureCurrentAccount().id();
         DeleteMode deleteMode = DeleteMode.from(mode);
 
+        directoryRepository.findActiveById(accountId, directoryId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "directory not found"));
+
         List<String> subtreeIds = directoryRepository.findActiveSubtreeIds(accountId, directoryId);
-        if (subtreeIds.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "directory not found");
-        }
 
         if (deleteMode == DeleteMode.MOVE_TO_INBOX) {
             directoryRepository.moveItemsToInbox(accountId, subtreeIds);
@@ -85,10 +109,10 @@ public class DirectoryService {
         }
     }
 
-    private List<DirectoryNode> buildTree(List<DirectoryRepository.DirectoryRecord> records) {
+    private List<DirectoryNode> buildTree(String accountId, List<DirectoryRepository.DirectoryRecord> records) {
         Map<String, MutableNode> nodes = new LinkedHashMap<>();
         for (DirectoryRepository.DirectoryRecord record : records) {
-            nodes.put(record.id(), new MutableNode(record.id(), record.parentId(), record.name(), record.sortOrder()));
+            nodes.put(record.id(), new MutableNode(record.id(), record.parentId(), record.name(), record.sortOrder(), record.color()));
         }
 
         List<MutableNode> roots = new ArrayList<>();
@@ -101,7 +125,7 @@ public class DirectoryService {
         }
 
         sortNodes(roots);
-        return roots.stream().map(this::toNode).toList();
+        return roots.stream().map(node -> toNode(accountId, node, 0)).toList();
     }
 
     private void sortNodes(List<MutableNode> nodes) {
@@ -113,22 +137,29 @@ public class DirectoryService {
         }
     }
 
-    private DirectoryNode toNode(MutableNode node) {
+    private DirectoryNode toNode(String accountId, MutableNode node, int level) {
+        int activeCount = directoryRepository.countActiveItems(accountId, node.id());
         return new DirectoryNode(
                 node.id(),
                 node.parentId(),
                 node.name(),
                 node.sortOrder(),
-                node.children().stream().map(this::toNode).toList()
+                node.color(),
+                activeCount,
+                level,
+                node.children().stream().map(child -> toNode(accountId, child, level + 1)).toList()
         );
     }
 
-    private DirectoryNode toNode(DirectoryRepository.DirectoryRecord record, List<DirectoryNode> children) {
+    private DirectoryNode toNode(DirectoryRepository.DirectoryRecord record, List<DirectoryNode> children, int activeCount) {
         return new DirectoryNode(
                 record.id(),
                 record.parentId(),
                 record.name(),
                 record.sortOrder(),
+                record.color(),
+                activeCount,
+                0,
                 children
         );
     }
@@ -156,7 +187,8 @@ public class DirectoryService {
     public record CreateDirectoryRequest(
             String name,
             String parentId,
-            Integer sortOrder
+            Integer sortOrder,
+            String color
     ) {
     }
 
@@ -165,11 +197,34 @@ public class DirectoryService {
     ) {
     }
 
+    public record UpdateColorRequest(
+            String color
+    ) {
+    }
+
+    public record DirectoryItemResponse(
+            String id,
+            String directoryId,
+            String title,
+            String notes,
+            String progress,
+            String priority,
+            String expectedAt,
+            String completedAt,
+            String trashedAt,
+            String createdAt,
+            String updatedAt
+    ) {
+    }
+
     public record DirectoryNode(
             String id,
             String parentId,
             String name,
             int sortOrder,
+            String color,
+            int activeCount,
+            int level,
             List<DirectoryNode> children
     ) {
     }
@@ -179,10 +234,11 @@ public class DirectoryService {
             String parentId,
             String name,
             int sortOrder,
+            String color,
             List<MutableNode> children
     ) {
-        private MutableNode(String id, String parentId, String name, int sortOrder) {
-            this(id, parentId, name, sortOrder, new ArrayList<>());
+        private MutableNode(String id, String parentId, String name, int sortOrder, String color) {
+            this(id, parentId, name, sortOrder, color, new ArrayList<>());
         }
     }
 }
