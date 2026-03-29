@@ -1,77 +1,90 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   completeItem,
+  createDirectory,
   createItem,
+  deleteDirectory,
   getBootstrap,
-  getViewItems,
+  getItems,
   patchItem,
 } from '../services/api';
 import {
   BootstrapData,
   DirectoryNode,
-  ITEM_PROGRESS_LABELS,
-  ItemProgress,
+  DirFilter,
   ItemSummary,
   SMART_VIEW_LABELS,
   SmartViewKey,
 } from '../types/item';
 
-type CreateFormState = 'hidden' | 'visible' | 'closing';
-type MorphPhase = 'card' | 'opening' | 'open' | 'closing';
-
-const VIEW_ORDER: SmartViewKey[] = ['inbox', 'today', 'upcoming', 'overdue'];
+const VIEW_ORDER: SmartViewKey[] = ['today', 'upcoming', 'overdue'];
 const IS_MAC = navigator.platform.startsWith('Mac');
 
-function formatExpectedAt(value: string | null) {
-  if (!value) return '未设置时间';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+function findDirName(nodes: DirectoryNode[], id: string): string {
+  for (const node of nodes) {
+    if (node.id === id) return node.name;
+    const found = findDirName(node.children, id);
+    if (found) return found;
+  }
+  return '';
 }
 
-function renderDirectoryNodes(nodes: DirectoryNode[]) {
-  return nodes.map((node) => (
-    <div key={node.id} className="tree__group">
-      <div className="tree__node">{node.name}</div>
-      {node.children.length > 0 ? (
-        <div className="tree__children">{renderDirectoryNodes(node.children)}</div>
-      ) : null}
-    </div>
-  ));
+function dirFilterEquals(a: DirFilter | null, b: DirFilter | null): boolean {
+  if (a === null && b === null) return true;
+  if (a === null || b === null) return false;
+  if (a.type !== b.type) return false;
+  if (a.type === 'directory' && b.type === 'directory') return a.id === b.id;
+  return true; // both unclassified
 }
 
 export function App() {
   const [bootstrap, setBootstrap] = useState<BootstrapData | null>(null);
-  const [activeView, setActiveView] = useState<SmartViewKey>('inbox');
+
+  // ── 双筛选器状态 ────────────────────────────────────────────────────────────
+  // 时间筛选：默认今天；null 表示不限制时间
+  const [timeFilter, setTimeFilter] = useState<SmartViewKey | null>('today');
+  // 目录筛选：默认不选；null 表示不限制目录（全部）
+  const [dirFilter, setDirFilter] = useState<DirFilter | null>(null);
+
   const [items, setItems] = useState<ItemSummary[]>([]);
   const [itemFilter, setItemFilter] = useState<'all' | 'active' | 'done'>('all');
+  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
+
+  function toggleDir(id: string) {
+    setExpandedDirs((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
   const [menuVisible, setMenuVisible] = useState(false);
   const [menuClosing, setMenuClosing] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // ── create form ────────────────────────────────────────────────────────────
-  const [formState, setFormState] = useState<CreateFormState>('hidden');
+  // ── quick create input ─────────────────────────────────────────────────────
+  const [quickTitle, setQuickTitle] = useState('');
   const [isCreating, setIsCreating] = useState(false);
-  const [createDraft, setCreateDraft] = useState({ title: '', notes: '' });
-  const pendingCreatedId = useRef<string | null>(null);
 
-  // ── item morph ─────────────────────────────────────────────────────────────
-  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
-  const [morphPhase, setMorphPhase] = useState<MorphPhase>('card');
+  // ── directory delete confirm ───────────────────────────────────────────────
+  const [confirmDeleteDirId, setConfirmDeleteDirId] = useState<string | null>(null);
+
+  // ── modal detail ───────────────────────────────────────────────────────────
+  const [modalItem, setModalItem] = useState<ItemSummary | null>(null);
   const [isDetailSaving, setIsDetailSaving] = useState(false);
   const [detailDraft, setDetailDraft] = useState({ title: '', notes: '' });
-  const morphRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  const detailFaceRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  const savedCardH = useRef(0);
+  const [modalOrigin, setModalOrigin] = useState('50% 50%');
+  const [closeWarningActive, setCloseWarningActive] = useState(false);
+  const originalDraft = useRef({ title: '', notes: '' });
+  const closeWarningTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tryCloseModalRef = useRef<() => void>(() => {});
+  const modalNotesRef = useRef<HTMLTextAreaElement>(null);
 
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const bootstrapReady = useRef(false);
+
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
   // ── filter menu ────────────────────────────────────────────────────────────
   const toggleFilterMenu = () => {
@@ -91,8 +104,17 @@ export function App() {
   }, [menuVisible, menuClosing]);
 
   // ── data ───────────────────────────────────────────────────────────────────
-  const loadViewItems = useCallback(async (view: SmartViewKey) => {
-    setItems(await getViewItems(view));
+  const loadItems = useCallback(async (tf: SmartViewKey | null, df: DirFilter | null) => {
+    setItems(await getItems({ view: tf, dirFilter: df }));
+  }, []);
+
+  const refreshBootstrap = useCallback(async () => {
+    try {
+      const data = await getBootstrap();
+      setBootstrap(data);
+    } catch {
+      // 静默失败
+    }
   }, []);
 
   useEffect(() => {
@@ -103,7 +125,8 @@ export function App() {
         const data = await getBootstrap();
         if (cancelled) return;
         setBootstrap(data);
-        await loadViewItems('inbox');
+        bootstrapReady.current = true;
+        await loadItems('today', null);
       } catch (e) {
         if (!cancelled) setErrorMessage((e as Error).message || '初始化失败');
       } finally {
@@ -112,61 +135,45 @@ export function App() {
     }
     void init();
     return () => { cancelled = true; };
-  }, [loadViewItems]);
+  }, [loadItems]);
 
   useEffect(() => {
-    if (!bootstrap) return;
+    if (!bootstrapReady.current) return;
     let cancelled = false;
     async function refresh() {
-      try { setErrorMessage(null); await loadViewItems(activeView); }
+      try { setErrorMessage(null); await loadItems(timeFilter, dirFilter); }
       catch (e) { if (!cancelled) setErrorMessage((e as Error).message || '加载失败'); }
     }
     void refresh();
     return () => { cancelled = true; };
-  }, [activeView, bootstrap, loadViewItems]);
+  }, [timeFilter, dirFilter, loadItems]);
 
-  // Reset both forms on view switch
+  // 切换筛选条件时重置快速创建和 modal
   useEffect(() => {
-    if (selectedItemId) {
-      const el = morphRefs.current.get(selectedItemId);
-      if (el) { el.style.height = ''; el.style.transition = ''; }
-    }
-    setFormState('hidden'); setCreateDraft({ title: '', notes: '' }); pendingCreatedId.current = null;
-    setMorphPhase('card'); setSelectedItemId(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeView]);
+    setQuickTitle('');
+    setModalItem(null);
+    setCloseWarningActive(false);
+  }, [timeFilter, dirFilter]);
 
-  // ── morph animation (height) ───────────────────────────────────────────────
-  useLayoutEffect(() => {
-    if (!selectedItemId) return;
-    const el = morphRefs.current.get(selectedItemId);
-    if (!el) return;
+  // Esc
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') tryCloseModalRef.current();
+    };
+    if (modalItem) document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [modalItem]);
 
-    if (morphPhase === 'opening') {
-      // Phase 1: card face fades out (CSS, 160ms)
-      // Phase 2 (after 160ms): animate height card→detail
-      const detailFace = detailFaceRefs.current.get(selectedItemId);
-      if (!detailFace) return;
-      const detailH = detailFace.offsetHeight;
-      el.style.height = `${savedCardH.current}px`;
-      el.style.overflow = 'hidden';
-      const t = setTimeout(() => {
-        el.style.transition = 'height 260ms cubic-bezier(0.22, 1, 0.36, 1)';
-        el.style.height = `${detailH}px`;
-      }, 160);
-      return () => clearTimeout(t);
-    }
+  // ── 筛选器点击交互 ──────────────────────────────────────────────────────────
+  function handleTimeFilterClick(view: SmartViewKey) {
+    // 单选 + 可反选：再次点击取消
+    setTimeFilter((prev) => (prev === view ? null : view));
+  }
 
-    if (morphPhase === 'closing') {
-      // Phase 1: detail face fades out (CSS, 160ms)
-      // Phase 2 (after 160ms): animate height detail→card
-      const t = setTimeout(() => {
-        el.style.transition = 'height 260ms cubic-bezier(0.22, 1, 0.36, 1)';
-        el.style.height = `${savedCardH.current}px`;
-      }, 160);
-      return () => clearTimeout(t);
-    }
-  }, [morphPhase, selectedItemId]);
+  function handleDirFilterClick(df: DirFilter) {
+    // 单选 + 可反选：再次点击取消
+    setDirFilter((prev) => (dirFilterEquals(prev, df) ? null : df));
+  }
 
   // ── derived ────────────────────────────────────────────────────────────────
   const visibleItems = useMemo(() => {
@@ -177,185 +184,235 @@ export function App() {
 
   const upcomingRangeLabel = bootstrap
     ? `${bootstrap.settings.recentRangeValue}${bootstrap.settings.recentRangeUnit === 'day' ? '天' : '周'}`
-    : '可配置范围';
+    : '';
 
-  // ── create form handlers ───────────────────────────────────────────────────
-  function handleQuickTitleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+  // 头部标题：组合显示时间+目录筛选状态
+  const activeViewLabel = useMemo(() => {
+    const timePart = timeFilter ? SMART_VIEW_LABELS[timeFilter] : null;
+    let dirPart: string | null = null;
+    if (dirFilter) {
+      if (dirFilter.type === 'unclassified') dirPart = '全部';
+      else dirPart = bootstrap ? findDirName(bootstrap.directories, dirFilter.id) : '';
+    }
+    if (timePart && dirPart) return `${timePart} · ${dirPart}`;
+    if (timePart) return timePart;
+    if (dirPart) return dirPart;
+    return '全部';
+  }, [timeFilter, dirFilter, bootstrap]);
+
+  // ── quick create handler ───────────────────────────────────────────────────
+  async function handleQuickTitleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key !== 'Enter') return;
     e.preventDefault();
-    if (!createDraft.title.trim()) return;
-    if (selectedItemId) {
-      const el = morphRefs.current.get(selectedItemId);
-      if (el) { el.style.height = ''; el.style.transition = ''; }
-      setMorphPhase('card'); setSelectedItemId(null);
-    }
-    setFormState('visible');
-  }
-
-  async function handleCreateConfirm() {
-    const title = createDraft.title.trim();
-    if (!title && !pendingCreatedId.current) return;
+    if (!quickTitle.trim()) return;
     try {
       setIsCreating(true); setErrorMessage(null);
-      let itemId = pendingCreatedId.current;
-      if (!itemId) {
-        const created = await createItem({ title });
-        itemId = created.id;
-        pendingCreatedId.current = created.id;
-      }
-      if (createDraft.notes.trim()) await patchItem(itemId, { notes: createDraft.notes });
-      pendingCreatedId.current = null;
-      setCreateDraft({ title: '', notes: '' });
-      setFormState('closing');
-      void loadViewItems(activeView);
+      const newItem = await createItem({
+        title: quickTitle.trim(),
+        directoryId: dirFilter?.type === 'directory' ? dirFilter.id : null,
+      });
+      setItems((prev) => [newItem, ...prev]);
+      void refreshBootstrap();
+      setQuickTitle('');
+      const draft = { title: newItem.title, notes: newItem.notes ?? '' };
+      originalDraft.current = draft;
+      setDetailDraft(draft);
+      setModalItem(newItem);
     } catch (e) {
       setErrorMessage((e as Error).message || '创建失败');
     } finally { setIsCreating(false); }
   }
 
-  function handleCreateCancel() {
-    if (pendingCreatedId.current) { pendingCreatedId.current = null; void loadViewItems(activeView); }
-    setCreateDraft({ title: '', notes: '' });
-    setFormState('closing');
-  }
-
-  function handleCreateFormAnimationEnd(e: React.AnimationEvent) {
-    if (e.target !== e.currentTarget) return;
-    if (formState === 'closing') setFormState('hidden');
-  }
-
   // ── item detail handlers ───────────────────────────────────────────────────
-  function handleSelectItem(item: ItemSummary) {
-    if (formState !== 'hidden') {
-      setFormState('hidden'); setCreateDraft({ title: '', notes: '' }); pendingCreatedId.current = null;
-    }
-
-    if (selectedItemId === item.id) {
-      setMorphPhase('closing');
-      return;
-    }
-
-    // Instant-close previous if any
-    if (selectedItemId) {
-      const prev = morphRefs.current.get(selectedItemId);
-      if (prev) { prev.style.height = ''; prev.style.transition = ''; }
-    }
-
-    const el = morphRefs.current.get(item.id);
-    if (el) savedCardH.current = el.offsetHeight;
-
-    setSelectedItemId(item.id);
-    setDetailDraft({ title: item.title, notes: item.notes ?? '' });
-    setMorphPhase('opening');
+  function handleSelectItem(item: ItemSummary, e: React.MouseEvent) {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const cardCx = rect.left + rect.width / 2;
+    const cardCy = rect.top + rect.height / 2;
+    const modalW = window.innerWidth * 0.66;
+    const modalH = modalW * 0.75;
+    const modalLeft = (window.innerWidth - modalW) / 2;
+    const modalTop = (window.innerHeight - modalH) / 2;
+    setModalOrigin(`${cardCx - modalLeft}px ${cardCy - modalTop}px`);
+    const draft = { title: item.title, notes: item.notes ?? '' };
+    originalDraft.current = draft;
+    setDetailDraft(draft);
+    setModalItem(item);
   }
+
+  function isDirty() {
+    return (
+      detailDraft.title !== originalDraft.current.title ||
+      detailDraft.notes !== originalDraft.current.notes
+    );
+  }
+
+  function forceCloseModal() {
+    if (closeWarningTimer.current) { clearTimeout(closeWarningTimer.current); closeWarningTimer.current = null; }
+    setCloseWarningActive(false);
+    setModalItem(null);
+  }
+
+  function tryCloseModal() {
+    if (!isDirty()) { forceCloseModal(); return; }
+    if (closeWarningTimer.current !== null) { forceCloseModal(); return; }
+    setCloseWarningActive(true);
+    closeWarningTimer.current = setTimeout(() => {
+      setCloseWarningActive(false);
+      closeWarningTimer.current = null;
+    }, 2000);
+  }
+
+  tryCloseModalRef.current = tryCloseModal;
 
   async function handleSaveDetail() {
-    if (!selectedItemId) return;
+    if (!modalItem) return;
     try {
       setIsDetailSaving(true); setErrorMessage(null);
-      await patchItem(selectedItemId, {
+      await patchItem(modalItem.id, {
         title: detailDraft.title,
         notes: detailDraft.notes.trim() === '' ? null : detailDraft.notes,
       });
-      setMorphPhase('closing');
-      void loadViewItems(activeView);
+      setModalItem(null);
+      await Promise.all([loadItems(timeFilter, dirFilter), refreshBootstrap()]);
     } catch (e) {
       setErrorMessage((e as Error).message || '保存失败');
     } finally { setIsDetailSaving(false); }
   }
 
-  function handleDiscardDetail() { setMorphPhase('closing'); }
-
-  function handleContainerTransitionEnd(e: React.TransitionEvent<HTMLDivElement>, itemId: string) {
-    if (e.propertyName !== 'height' || e.target !== e.currentTarget) return;
-    if (selectedItemId !== itemId) return;
-    const el = morphRefs.current.get(itemId);
-    if (!el) return;
-
-    if (morphPhase === 'opening') {
-      el.style.transition = '';
-      // keep explicit height so absolute detail-face is fully visible
-      setMorphPhase('open');
-    } else if (morphPhase === 'closing') {
-      el.style.height = ''; el.style.overflow = ''; el.style.transition = '';
-      setMorphPhase('card'); setSelectedItemId(null);
-    }
-  }
-
   async function handleComplete(itemId: string) {
     try {
       setErrorMessage(null);
+      if (modalItem?.id === itemId) setModalItem(null);
       await completeItem(itemId);
-      if (selectedItemId === itemId) {
-        const el = morphRefs.current.get(itemId);
-        if (el) { el.style.height = ''; el.style.transition = ''; }
-        setMorphPhase('card'); setSelectedItemId(null);
-      }
-      await loadViewItems(activeView);
+      await Promise.all([loadItems(timeFilter, dirFilter), refreshBootstrap()]);
     } catch (e) { setErrorMessage((e as Error).message || '完成操作失败'); }
   }
 
-  // ── form body (shared between create + detail) ─────────────────────────────
+  // ── directory delete ──────────────────────────────────────────────────────
+  function isInSubtree(targetId: string, rootId: string, nodes: DirectoryNode[]): boolean {
+    for (const node of nodes) {
+      if (node.id === rootId) return true;
+      if (isInSubtree(targetId, rootId, node.children)) return true;
+    }
+    return false;
+  }
+
+  async function handleDeleteDir(dirId: string) {
+    try {
+      setErrorMessage(null);
+      await deleteDirectory(dirId);
+      setConfirmDeleteDirId(null);
+      if (
+        dirFilter?.type === 'directory' &&
+        (dirFilter.id === dirId || isInSubtree(dirFilter.id, dirId, bootstrap?.directories ?? []))
+      ) {
+        setDirFilter(null);
+      }
+      await refreshBootstrap();
+    } catch (e) {
+      setErrorMessage((e as Error).message || '删除目录失败');
+    }
+  }
+
+  // ── directory nodes ────────────────────────────────────────────────────────
+  function renderDirNodes(nodes: DirectoryNode[], depth: number): React.ReactNode {
+    return nodes.map((node) => {
+      const isActive = dirFilter?.type === 'directory' && dirFilter.id === node.id;
+      const isExpanded = expandedDirs.has(node.id);
+      const hasChildren = node.children.length > 0;
+      const isConfirming = confirmDeleteDirId === node.id;
+
+      return (
+        <li key={node.id}>
+          <button
+            type="button"
+            className={`nav-list__item${depth > 0 ? ' nav-list__item--child' : ''}${isActive ? ' is-active' : ''} nav-list__item--deletable${isConfirming ? ' is-confirming' : ''}`}
+            onClick={() => {
+              handleDirFilterClick({ type: 'directory', id: node.id });
+              if (hasChildren) toggleDir(node.id);
+            }}
+            onMouseLeave={() => setConfirmDeleteDirId(null)}
+          >
+            <span className="dir-root__label">
+              {node.color && <span className="category-dot" style={{ background: node.color }} />}
+              <span>
+                {node.name}
+                {node.activeCount > 0 && <span className="dir-inline-count">({node.activeCount})</span>}
+              </span>
+            </span>
+            <span
+              role="button"
+              tabIndex={0}
+              className={`dir-delete-btn${isConfirming ? ' dir-delete-btn--confirm' : ''}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                isConfirming ? void handleDeleteDir(node.id) : setConfirmDeleteDirId(node.id);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.stopPropagation();
+                  isConfirming ? void handleDeleteDir(node.id) : setConfirmDeleteDirId(node.id);
+                }
+              }}
+            >
+              {isConfirming ? '确认' : (
+                <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M3 4h10M6 4V3h4v1M5 4l.5 8h5L11 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              )}
+            </span>
+          </button>
+          {hasChildren && isExpanded && (
+            <ul className="dir-children">
+              {renderDirNodes(node.children, depth + 1)}
+            </ul>
+          )}
+        </li>
+      );
+    });
+  }
+
+  // ── form body ──────────────────────────────────────────────────────────────
   function renderFormBody(
     draft: { title: string; notes: string },
     onTitle: (v: string) => void,
     onNotes: (v: string) => void,
     onConfirm: () => void,
-    onCancel: () => void,
     saving: boolean,
-    label: string,
-    autoFocus: boolean,
-    progress?: ItemProgress,
+    notesRef?: React.RefObject<HTMLTextAreaElement | null>,
   ) {
-    const progressWidth: Record<ItemProgress, string> = {
-      todo: '0%', doing: '55%', paused: '30%', done: '100%',
-    };
-
     return (
       <>
-        <input
-          className="create-form__title-input"
-          type="text"
-          value={draft.title}
-          autoFocus={autoFocus}
-          onChange={(e) => onTitle(e.target.value)}
+        <div className="create-form__title-row">
+          <input
+            className="create-form__title-input"
+            type="text"
+            value={draft.title}
+            autoFocus
+            onChange={(e) => onTitle(e.target.value)}
+            onKeyDown={(e) => {
+              if ((e.metaKey || e.altKey) && e.key === 'Enter') { onConfirm(); return; }
+              if (e.key === 'Enter') { e.preventDefault(); notesRef?.current?.focus(); }
+            }}
+          />
+          <button
+            type="button"
+            className="create-form__confirm"
+            disabled={saving || !draft.title.trim()}
+            onClick={onConfirm}
+          >
+            {saving ? '保存中...' : '保存'}
+            {!saving && <kbd className="create-form__kbd">{IS_MAC ? '⌘↵' : 'Alt↵'}</kbd>}
+          </button>
+        </div>
+        <textarea
+          ref={notesRef}
+          className="create-form__textarea"
+          value={draft.notes}
+          placeholder="plan..."
+          onChange={(e) => onNotes(e.target.value)}
           onKeyDown={(e) => { if ((e.metaKey || e.altKey) && e.key === 'Enter') onConfirm(); }}
         />
-        <label className="create-form__label">
-          <span>备注</span>
-          <textarea
-            className="create-form__textarea"
-            rows={4}
-            value={draft.notes}
-            placeholder="添加备注..."
-            onChange={(e) => onNotes(e.target.value)}
-            onKeyDown={(e) => { if ((e.metaKey || e.altKey) && e.key === 'Enter') onConfirm(); }}
-          />
-        </label>
-        <div className="create-form__actions">
-          {progress !== undefined && (
-            <div className="create-form__progress-track">
-              <div
-                className={`create-form__progress-fill create-form__progress-fill--${progress}`}
-                style={{ width: progressWidth[progress] }}
-              />
-            </div>
-          )}
-          <div className="create-form__actions-right">
-            <button
-              type="button"
-              className="create-form__confirm"
-              disabled={saving || !draft.title.trim()}
-              onClick={onConfirm}
-            >
-              {saving ? `${label}中...` : label}
-              {!saving && <kbd className="create-form__kbd">{IS_MAC ? '⌘↵' : 'Alt↵'}</kbd>}
-            </button>
-            <button type="button" className="create-form__cancel" disabled={saving} onClick={onCancel}>
-              取消
-            </button>
-          </div>
-        </div>
       </>
     );
   }
@@ -365,49 +422,61 @@ export function App() {
     <div className="shell">
       <aside className="sidebar">
         <div className="brand">
-          <span className="brand__eyebrow">Personal Item Manager</span>
           <h1>My Pag</h1>
         </div>
+
+        {/* 时间分区：横向 tab，单选可反选，null = 不限时间 */}
+        <div className="time-tabs">
+          {VIEW_ORDER.map((view) => (
+            <button
+              key={view}
+              type="button"
+              className={`time-tabs__tab${timeFilter === view ? ' is-active' : ''}`}
+              onClick={() => handleTimeFilterClick(view)}
+            >
+              {SMART_VIEW_LABELS[view]}
+            </button>
+          ))}
+        </div>
+
+        {/* 目录分区：单选可反选，null = 不限目录 */}
         <section className="panel">
-          <div className="panel__title">智能视图</div>
           <ul className="nav-list">
-            {VIEW_ORDER.map((view) => (
-              <li key={view}>
-                <button
-                  type="button"
-                  className={`nav-list__item${view === activeView ? ' is-active' : ''}`}
-                  onClick={() => setActiveView(view)}
-                >
-                  <span>{SMART_VIEW_LABELS[view]}</span>
-                  {view === 'upcoming' ? <small>{upcomingRangeLabel}</small> : null}
-                </button>
-              </li>
-            ))}
+            <li>
+              <button
+                type="button"
+                className={`nav-list__item${dirFilter?.type === 'unclassified' ? ' is-active' : ''}`}
+                onClick={() => handleDirFilterClick({ type: 'unclassified' })}
+              >
+                <span>
+                  全部
+                  {(bootstrap?.unclassifiedCount ?? 0) > 0 && (
+                    <span className="dir-inline-count">({bootstrap?.unclassifiedCount})</span>
+                  )}
+                </span>
+              </button>
+            </li>
+            {bootstrap ? renderDirNodes(bootstrap.directories, 0) : null}
           </ul>
-        </section>
-        <section className="panel">
-          <div className="panel__title">目录</div>
-          <div className="tree">{bootstrap ? renderDirectoryNodes(bootstrap.directories) : null}</div>
+
         </section>
       </aside>
 
       <main className="content">
         <header className="content__header">
           <div className="content__header-left">
-            <span className="section-tag">当前视图</span>
             <div className="content__header-title-row">
-              <h2>{SMART_VIEW_LABELS[activeView]}</h2>
-              {formState === 'hidden' && (
-                <input
-                  className="header-quick-input"
-                  aria-label="新建计划标题"
-                  placeholder="new plan..."
-                  type="text"
-                  value={createDraft.title}
-                  onChange={(e) => setCreateDraft((p) => ({ ...p, title: e.target.value }))}
-                  onKeyDown={handleQuickTitleKeyDown}
-                />
-              )}
+              <h2>{activeViewLabel}</h2>
+              <input
+                className="header-quick-input"
+                aria-label="新建计划标题"
+                placeholder={isCreating ? '创建中...' : 'new plan...'}
+                type="text"
+                value={quickTitle}
+                disabled={isCreating}
+                onChange={(e) => setQuickTitle(e.target.value)}
+                onKeyDown={(e) => void handleQuickTitleKeyDown(e)}
+              />
             </div>
           </div>
           <div className="filter-dropdown" ref={dropdownRef}>
@@ -431,76 +500,59 @@ export function App() {
         {isLoading ? <p>正在加载数据...</p> : null}
         {errorMessage ? <p className="error-message">{errorMessage}</p> : null}
 
-        {/* Create form */}
-        {formState !== 'hidden' && (
-          <div
-            className={`create-form${formState === 'closing' ? ' is-closing' : ''}`}
-            onAnimationEnd={handleCreateFormAnimationEnd}
-          >
-            {renderFormBody(
-              createDraft,
-              (v) => setCreateDraft((p) => ({ ...p, title: v })),
-              (v) => setCreateDraft((p) => ({ ...p, notes: v })),
-              () => void handleCreateConfirm(),
-              handleCreateCancel,
-              isCreating, '创建', true,
-            )}
-          </div>
-        )}
-
         <section className="list">
-          {visibleItems.map((item) => {
-            const isSelected = selectedItemId === item.id;
-            const phase = isSelected ? morphPhase : 'card';
-            return (
-              <div
-                key={item.id}
-                ref={(el) => { if (el) morphRefs.current.set(item.id, el); else morphRefs.current.delete(item.id); }}
-                className={`item-morph item-morph--${phase}${item.progress === 'done' ? ' item-morph--done' : ''}`}
-                onTransitionEnd={(e) => handleContainerTransitionEnd(e, item.id)}
-                onClick={() => handleSelectItem(item)}
-              >
-                {/* Card face — always in DOM, position normal flow */}
-                <div className="item-morph__card-face">
-                  <div className="card__meta">
-                    <span>{ITEM_PROGRESS_LABELS[item.progress]}</span>
-                    <span>{formatExpectedAt(item.expectedAt)}</span>
-                  </div>
-                  <h3>{item.title}</h3>
-                  {item.progress !== 'done' && (
+          {visibleItems.map((item) => (
+            <div
+              key={item.id}
+              className={`item-morph${item.progress === 'done' ? ' item-morph--done' : ''}`}
+              onClick={(e) => handleSelectItem(item, e)}
+            >
+              <div className="item-morph__card-face">
+                <div className="card__body">
+                  <div className="card__title-row">
                     <button
                       type="button"
-                      className="card__complete"
-                      onClick={(e) => { e.stopPropagation(); void handleComplete(item.id); }}
+                      className={`card__checkbox${item.progress === 'done' ? ' card__checkbox--done' : ''}`}
+                      aria-label={item.progress === 'done' ? '已完成' : '标记完成'}
+                      onClick={(e) => { e.stopPropagation(); if (item.progress !== 'done') void handleComplete(item.id); }}
                     >
-                      完成
+                      {item.progress === 'done' && (
+                        <svg viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                          <path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      )}
                     </button>
-                  )}
-                </div>
-
-                {/* Detail face — position absolute, overlays card face */}
-                {isSelected && phase !== 'card' && (
-                  <div
-                    ref={(el) => { if (el) detailFaceRefs.current.set(item.id, el); else detailFaceRefs.current.delete(item.id); }}
-                    className="item-morph__detail-face"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    {renderFormBody(
-                      detailDraft,
-                      (v) => setDetailDraft((p) => ({ ...p, title: v })),
-                      (v) => setDetailDraft((p) => ({ ...p, notes: v })),
-                      () => void handleSaveDetail(),
-                      handleDiscardDetail,
-                      isDetailSaving, '保存', true,
-                      item.progress,
-                    )}
+                    <h3 className="card__title">{item.title}</h3>
                   </div>
-                )}
+                  {item.notes && <p className="card__excerpt">{item.notes}</p>}
+                </div>
               </div>
-            );
-          })}
+            </div>
+          ))}
         </section>
       </main>
+
+      {/* Modal */}
+      {modalItem && (
+        <div className="modal-overlay" onClick={tryCloseModal}>
+          <div className="modal-dialog" style={{ transformOrigin: modalOrigin }} onClick={(e) => e.stopPropagation()}>
+            {renderFormBody(
+              detailDraft,
+              (v) => setDetailDraft((p) => ({ ...p, title: v })),
+              (v) => setDetailDraft((p) => ({ ...p, notes: v })),
+              () => void handleSaveDetail(),
+              isDetailSaving,
+              modalNotesRef,
+            )}
+          </div>
+          {closeWarningActive && (
+            <div className="close-toast">
+              <span>再按一次以放弃修改</span>
+              <div className="close-toast__bar" />
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
