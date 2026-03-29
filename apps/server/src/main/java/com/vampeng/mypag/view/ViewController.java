@@ -16,6 +16,11 @@ public class ViewController {
         this.viewService = viewService;
     }
 
+    @GetMapping("/unclassified")
+    public List<ViewService.ViewItemResponse> unclassified() {
+        return viewService.unclassified();
+    }
+
     @GetMapping("/inbox")
     public List<ViewService.ViewItemResponse> inbox() {
         return viewService.inbox();

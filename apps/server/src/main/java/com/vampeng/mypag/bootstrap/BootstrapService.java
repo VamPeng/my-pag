@@ -6,8 +6,8 @@ import org.springframework.stereotype.Service;
 
 import com.vampeng.mypag.account.CurrentAccountService;
 import com.vampeng.mypag.directory.DirectoryService;
-import com.vampeng.mypag.item.ItemRepository;
 import com.vampeng.mypag.setting.SettingsService;
+import com.vampeng.mypag.view.ViewRepository;
 
 @Service
 public class BootstrapService {
@@ -15,25 +15,25 @@ public class BootstrapService {
     private final CurrentAccountService currentAccountService;
     private final SettingsService settingsService;
     private final DirectoryService directoryService;
-    private final ItemRepository itemRepository;
+    private final ViewRepository viewRepository;
 
     public BootstrapService(
             CurrentAccountService currentAccountService,
             SettingsService settingsService,
             DirectoryService directoryService,
-            ItemRepository itemRepository
+            ViewRepository viewRepository
     ) {
         this.currentAccountService = currentAccountService;
         this.settingsService = settingsService;
         this.directoryService = directoryService;
-        this.itemRepository = itemRepository;
+        this.viewRepository = viewRepository;
     }
 
     public BootstrapResponse getBootstrap() {
         CurrentAccountService.Account account = currentAccountService.ensureCurrentAccount();
         SettingsService.SettingsResponse settings = settingsService.getCurrentSettings();
         List<DirectoryService.DirectoryNode> directories = directoryService.getTree();
-        int unclassifiedCount = itemRepository.countUnclassifiedActive(account.id());
+        int unclassifiedCount = viewRepository.unclassifiedCount(account.id());
         return new BootstrapResponse(
                 new AccountResponse(account.id(), account.name(), account.status()),
                 settings,

@@ -246,8 +246,71 @@ button {
   width: 200px;
 }
 
+/* 主区：三级目录 tag（单选可反选，悬停显示删除） */
+.dir-tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 0 0 22px;
+}
+
+.dir-tag-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: 8px;
+  padding: 0 4px 0 0;
+  background: var(--md-sys-color-surface-container-low);
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 0.8125rem;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.dir-tag-wrap:hover:not(.is-active) {
+  border-color: color-mix(in srgb, var(--md-sys-color-primary) 35%, var(--md-sys-color-outline-variant));
+  color: var(--md-sys-color-on-surface);
+}
+
+.dir-tag-wrap.is-active {
+  border-color: var(--md-sys-color-primary);
+  background: color-mix(in srgb, var(--md-sys-color-primary) 14%, transparent);
+  color: var(--md-sys-color-primary);
+}
+
+.dir-tag__main {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 500;
+  padding: 6px 4px 6px 12px;
+  border-radius: 7px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.dir-tag-wrap--deletable:hover .dir-delete-btn {
+  visibility: visible;
+}
+
+.dir-tag-wrap.is-confirming .dir-delete-btn {
+  visibility: visible;
+}
+
+.dir-tag-wrap--deletable:hover .dir-delete-btn:hover {
+  background: color-mix(in srgb, var(--md-sys-color-error) 12%, transparent);
+  color: var(--md-sys-color-error);
+}
+
 .quick-create-row {
-  padding: 0 0 12px;
+  padding: 0 0 6px;
 }
 
 /* ── 正文顶部添加目录按钮 ─────────────────────────────────────────────────── */
@@ -613,12 +676,15 @@ button {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  margin: 24px 0;
+  margin: 10px 0 20px;
 }
 
 /* ── item card ───────────────────────────────────────────────────────────── */
 
 .item-morph {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
   border-radius: 18px;
   background: var(--md-sys-color-surface-container-lowest);
   border: 1px solid var(--md-sys-color-outline-variant);
@@ -628,6 +694,144 @@ button {
   transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 
+/* 与卡片等高、贴齐左缘；宽度与圆角裁切后上下角与侧缘成直角观感 */
+.item-morph__accent {
+  flex-shrink: 0;
+  width: 10px;
+  align-self: stretch;
+  min-height: 100%;
+}
+
+button.item-morph__accent {
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  font: inherit;
+  display: block;
+}
+
+.item-morph__accent--placeholder {
+  background: var(--md-sys-color-outline-variant);
+  opacity: 0.55;
+}
+
+.item-morph__accent:not(.item-morph__accent--placeholder):hover {
+  filter: brightness(1.06);
+}
+
+.item-morph__accent--placeholder:hover {
+  opacity: 0.85;
+}
+
+/* ── 任务卡片：级联目录选择 ───────────────────────────────────────────────── */
+
+.dir-cascade-picker {
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-lowest);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.14);
+  overflow: hidden;
+}
+
+.dir-cascade-picker__columns {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  max-height: min(320px, calc(100vh - 120px));
+  min-height: 0;
+}
+
+.dir-cascade-picker__col {
+  width: 200px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.dir-cascade-picker__col:last-child {
+  border-right: none;
+}
+
+.dir-cascade-picker__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 10px 12px;
+  font-size: 0.875rem;
+  color: var(--md-sys-color-on-surface);
+  cursor: pointer;
+  text-align: left;
+}
+
+.dir-cascade-picker__row:hover {
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.dir-cascade-picker__row.is-active {
+  background: var(--md-sys-color-surface-container-highest);
+}
+
+.dir-cascade-picker__row--unclassified {
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.dir-cascade-picker__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dir-cascade-picker__chev {
+  flex-shrink: 0;
+  opacity: 0.5;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.dir-cascade-picker__dot-spacer {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+}
+
+.dir-cascade-picker__footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 10px 12px;
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-low);
+  flex-shrink: 0;
+}
+
+.dir-cascade-picker__confirm {
+  border: none;
+  border-radius: 999px;
+  background: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+  padding: 10px 20px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.875rem;
+  font-family: inherit;
+}
+
+.dir-cascade-picker__confirm .create-form__kbd {
+  margin-left: 2px;
+}
+
+
 .item-morph:hover {
   border-color: var(--md-sys-color-primary);
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.1);
@@ -635,7 +839,14 @@ button {
 
 .item-morph--done { opacity: 0.55; }
 
+/* 完成 FLIP：位移期间略抬高，避免与相邻卡片叠影 */
+.item-morph--flip {
+  pointer-events: none;
+}
+
 .item-morph__card-face {
+  flex: 1;
+  min-width: 0;
   padding: 16px 18px;
 }
 

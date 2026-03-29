@@ -7,12 +7,14 @@ export function buildApiUrl(path: string) {
 }
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const hasBody = init?.body != null && init.body !== '';
+  const headers = new Headers(init?.headers);
+  if (hasBody && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
   const response = await fetch(buildApiUrl(path), {
     ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
+    headers,
   });
 
   if (!response.ok) {
@@ -63,11 +65,20 @@ export async function patchItem(
     title?: string;
     notes?: string | null;
     progress?: ItemProgress;
+    /** 传 `null` 表示移入未分类（请求体发 `""`，与后端 normalize 一致） */
+    directoryId?: string | null;
   },
 ) {
+  const body: Record<string, unknown> = {};
+  if (payload.title !== undefined) body.title = payload.title;
+  if (payload.notes !== undefined) body.notes = payload.notes;
+  if (payload.progress !== undefined) body.progress = payload.progress;
+  if (payload.directoryId !== undefined) {
+    body.directoryId = payload.directoryId === null ? '' : payload.directoryId;
+  }
   return requestJson<ItemSummary>(`/api/items/${itemId}`, {
     method: 'PATCH',
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
   });
 }
 
@@ -94,8 +105,14 @@ export async function createDirectory(payload: { name: string; parentId?: string
   });
 }
 
-export async function deleteDirectory(dirId: string) {
-  return requestJson<void>(`/api/directories/${dirId}?mode=move_to_inbox`, {
-    method: 'DELETE',
+export type DirectoryDeleteMode = 'move_to_inbox' | 'move_to_parent' | 'delete_with_items';
+
+export async function deleteDirectory(
+  dirId: string,
+  mode: DirectoryDeleteMode = 'move_to_inbox',
+) {
+  return requestJson<void>(`/api/directories/${dirId}/delete`, {
+    method: 'POST',
+    body: JSON.stringify({ mode }),
   });
 }

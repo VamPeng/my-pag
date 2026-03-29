@@ -3,6 +3,7 @@ package com.vampeng.mypag.api;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -142,16 +143,78 @@ class ApiIntegrationTest {
                         .param("mode", "move_to_inbox"))
                 .andExpect(status().isNoContent());
 
-        Integer activeDirectories = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM directories WHERE is_deleted = 0", Integer.class);
+        // 账户被删后会触发 ensureCurrentAccount 重新插入默认 5 个目录，不能断言全表 active 为 0
+        Integer remainingUserDirs = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM directories WHERE is_deleted = 0 AND id IN (?, ?)",
+                Integer.class, parentId, childId);
         String itemDirectoryId = jdbcTemplate.queryForObject(
                 "SELECT directory_id FROM items WHERE id = 'item-1'", String.class);
         String trashedAt = jdbcTemplate.queryForObject(
                 "SELECT trashed_at FROM items WHERE id = 'item-1'", String.class);
 
-        assertThat(activeDirectories).isZero();
+        assertThat(remainingUserDirs).isZero();
         assertThat(itemDirectoryId).isNull();
         assertThat(trashedAt).isNull();
+    }
+
+    @Test
+    void deleteDirectoryMoveToParentShouldReassignItemsToParent() throws Exception {
+        String l2Id = createDirectory("二级", null);
+        String l3Id = createDirectory("三级", l2Id);
+
+        jdbcTemplate.update("""
+                INSERT INTO items (
+                    id, account_id, directory_id, title, notes, progress,
+                    priority, expected_at, completed_at, trashed_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+                """, "item-l3", "default-account", l3Id, "task-l3", null, "todo", null, null, null, null);
+
+        mockMvc.perform(delete("/api/directories/{id}", l3Id)
+                        .param("mode", "move_to_parent"))
+                .andExpect(status().isNoContent());
+
+        String itemDirectoryId = jdbcTemplate.queryForObject(
+                "SELECT directory_id FROM items WHERE id = 'item-l3'", String.class);
+        Integer l3StillActive = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM directories WHERE id = ? AND is_deleted = 0", Integer.class, l3Id);
+
+        assertThat(itemDirectoryId).isEqualTo(l2Id);
+        assertThat(l3StillActive).isZero();
+    }
+
+    @Test
+    void deleteDirectoryViaPostBodyShouldWorkLikeDeleteQuery() throws Exception {
+        String l2Id = createDirectory("二级B", null);
+        String l3Id = createDirectory("三级B", l2Id);
+
+        mockMvc.perform(post("/api/directories/{id}/delete", l3Id)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"mode\":\"move_to_parent\"}"))
+                .andExpect(status().isNoContent());
+
+        Integer l3StillActive = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM directories WHERE id = ? AND is_deleted = 0", Integer.class, l3Id);
+        assertThat(l3StillActive).isZero();
+    }
+
+    @Test
+    void deleteDirectoryMoveToParentWhenNoParentShouldMoveItemsToInbox() throws Exception {
+        String rootId = createDirectory("根", null);
+
+        jdbcTemplate.update("""
+                INSERT INTO items (
+                    id, account_id, directory_id, title, notes, progress,
+                    priority, expected_at, completed_at, trashed_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+                """, "item-root", "default-account", rootId, "task-root", null, "todo", null, null, null, null);
+
+        mockMvc.perform(delete("/api/directories/{id}", rootId)
+                        .param("mode", "move_to_parent"))
+                .andExpect(status().isNoContent());
+
+        String itemDirectoryId = jdbcTemplate.queryForObject(
+                "SELECT directory_id FROM items WHERE id = 'item-root'", String.class);
+        assertThat(itemDirectoryId).isNull();
     }
 
     @Test

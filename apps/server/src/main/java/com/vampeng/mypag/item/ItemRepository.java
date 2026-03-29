@@ -92,12 +92,42 @@ public class ItemRepository {
             sql.append(" AND priority = ?");
             args.add(filter.priority());
         }
-        if (filter.directoryId() != null) {
-            sql.append(" AND directory_id = ?");
-            args.add(filter.directoryId());
+
+        // Directory filter: unclassified / subtree / no filter
+        if (filter.unclassifiedOnly()) {
+            sql.append(" AND directory_id IS NULL");
+        } else if (filter.directoryIds() != null && !filter.directoryIds().isEmpty()) {
+            String placeholders = filter.directoryIds().stream().map(id -> "?").collect(java.util.stream.Collectors.joining(","));
+            sql.append(" AND directory_id IN (").append(placeholders).append(")");
+            args.addAll(filter.directoryIds());
         }
 
-        sql.append(" ORDER BY created_at DESC");
+        // Time filter based on view type
+        if ("today".equals(filter.viewType())) {
+            sql.append(" AND expected_at IS NOT NULL");
+            sql.append(" AND datetime(expected_at) >= datetime(?)");
+            sql.append(" AND datetime(expected_at) < datetime(?)");
+            args.add(filter.rangeStart());
+            args.add(filter.rangeEnd());
+        } else if ("upcoming".equals(filter.viewType())) {
+            sql.append(" AND expected_at IS NOT NULL");
+            sql.append(" AND datetime(expected_at) >= datetime(?)");
+            sql.append(" AND datetime(expected_at) <= datetime(?)");
+            args.add(filter.rangeStart());
+            args.add(filter.rangeEnd());
+        } else if ("overdue".equals(filter.viewType())) {
+            sql.append(" AND expected_at IS NOT NULL");
+            sql.append(" AND progress != 'done'");
+            sql.append(" AND datetime(expected_at) < datetime(?)");
+            args.add(filter.rangeStart());
+        }
+
+        // Time-filtered views: sort by expected_at; others: sort by created_at
+        if (filter.viewType() != null) {
+            sql.append(" ORDER BY datetime(expected_at) ASC, created_at ASC");
+        } else {
+            sql.append(" ORDER BY created_at DESC");
+        }
 
         return jdbcTemplate.query(sql.toString(), this::mapRow, args.toArray());
     }
@@ -178,7 +208,13 @@ public class ItemRepository {
             String q,
             String progress,
             String priority,
-            String directoryId
+            // Directory filter: exactly one of unclassifiedOnly=true OR directoryIds non-null, or neither
+            List<String> directoryIds,
+            boolean unclassifiedOnly,
+            // Time filter
+            String viewType,      // "today" | "upcoming" | "overdue" | null
+            String rangeStart,    // today: day start; upcoming: now; overdue: now
+            String rangeEnd       // today: next day start; upcoming: upper bound; overdue: unused
     ) {
     }
 

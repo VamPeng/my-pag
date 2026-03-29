@@ -28,9 +28,10 @@ public class ItemController {
             @RequestParam(value = "q", required = false) String q,
             @RequestParam(value = "progress", required = false) String progress,
             @RequestParam(value = "priority", required = false) String priority,
-            @RequestParam(value = "directoryId", required = false) String directoryId
+            @RequestParam(value = "directoryId", required = false) String directoryId,
+            @RequestParam(value = "view", required = false) String view
     ) {
-        return itemService.list(new ItemService.ListItemsQuery(q, progress, priority, directoryId));
+        return itemService.list(new ItemService.ListItemsQuery(q, progress, priority, directoryId, view));
     }
 
     @PostMapping

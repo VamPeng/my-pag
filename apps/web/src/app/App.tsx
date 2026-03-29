@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import {
   completeItem,
@@ -9,6 +9,13 @@ import {
   getItems,
   patchItem,
 } from '../services/api';
+import {
+  readPersistedDirSelection,
+  validatePersistedDirSelection,
+  writePersistedDirSelection,
+} from '../services/directorySelectionStorage';
+import { compareDoneByCompletedAtDesc, sortItemsForListDisplay } from '../utils/itemListSort';
+import { DirectoryCascadePicker, type DirPickerAnchor } from '../components/DirectoryCascadePicker';
 import {
   BootstrapData,
   DirectoryNode,
@@ -58,6 +65,34 @@ function findDirNamePath(nodes: DirectoryNode[], targetId: string): string[] | n
   return null;
 }
 
+function findDirectoryNode(nodes: DirectoryNode[], id: string): DirectoryNode | null {
+  for (const node of nodes) {
+    if (node.id === id) return node;
+    const found = findDirectoryNode(node.children, id);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * 任务条左侧色条用的颜色：与侧栏里目录名旁小圆点（`category-dot`）同源，即该目录节点在数据里的 `color` 字段。
+ * 子目录在创建时常为 `color: null`，此时沿 `parentId` 向上找**最近一个有颜色的祖先**（通常是侧栏里带圆点的「根」目录），
+ * 这样任务挂在子目录下时条色仍与所属分类一致。
+ */
+function findDirectoryAccentColor(nodes: DirectoryNode[], directoryId: string | null): string | null {
+  if (!directoryId) return null;
+  let current: DirectoryNode | null = findDirectoryNode(nodes, directoryId);
+  while (current) {
+    if (current.color) return current.color;
+    if (!current.parentId) return null;
+    current = findDirectoryNode(nodes, current.parentId);
+  }
+  return null;
+}
+
+/** 侧栏最多展示到 level 2（0=根、1、2）；level 3 在主区以 tag 展示 */
+const SIDEBAR_MAX_LEVEL = 2;
+
 function dirFilterEquals(a: DirFilter | null, b: DirFilter | null): boolean {
   if (a === null && b === null) return true;
   if (a === null || b === null) return false;
@@ -74,6 +109,8 @@ export function App() {
   const [timeFilter, setTimeFilter] = useState<SmartViewKey | null>('today');
   // 目录筛选：默认不选；null 表示不限制目录（全部）
   const [dirFilter, setDirFilter] = useState<DirFilter | null>(null);
+  /** 选中二级目录时，其下三级目录在主区 tag 单选；null 表示未选三级（列表为二级子树） */
+  const [level3DirId, setLevel3DirId] = useState<string | null>(null);
 
   const [items, setItems] = useState<ItemSummary[]>([]);
   const [itemFilter, setItemFilter] = useState<'all' | 'active' | 'done'>('all');
@@ -88,6 +125,7 @@ export function App() {
 
   // ── directory delete confirm ───────────────────────────────────────────────
   const [confirmDeleteDirId, setConfirmDeleteDirId] = useState<string | null>(null);
+  const [confirmDeleteLevel3Id, setConfirmDeleteLevel3Id] = useState<string | null>(null);
 
   // ── add directory ──────────────────────────────────────────────────────────
   const [isAddingDir, setIsAddingDir] = useState(false);
@@ -106,11 +144,22 @@ export function App() {
   const tryCloseModalRef = useRef<() => void>(() => {});
   const modalNotesRef = useRef<HTMLTextAreaElement>(null);
 
+  /** 点击任务左侧色条：级联选择目录 */
+  const [dirPicker, setDirPicker] = useState<{ itemId: string; anchor: DirPickerAnchor } | null>(null);
+
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const bootstrapReady = useRef(false);
+  /** bootstrap 已就绪且已应用本地恢复的目录筛选后，再拉列表与写入 localStorage，避免覆盖恢复数据 */
+  const [isBootstrapReady, setIsBootstrapReady] = useState(false);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
+  /** 点击完成时 FLIP：记录点击前列顶位置，乐观重排后再 translateY 到新位置 */
+  const completeFlipSnapshotRef = useRef<{ itemId: string; firstTop: number } | null>(null);
+  const [completeFlipTick, setCompleteFlipTick] = useState(0);
+  /** 有 FLIP 时需「接口成功 + 动画结束」再 loadItems，避免拉到旧状态 */
+  const completeFlipSyncRef = useRef({ apiDone: false, animDone: false });
+  /** 三级删除进入「确认」后，需间隔一段时间才允许真正删除，避免双击第二次误触删除 */
+  const level3DeleteConfirmReadyAtRef = useRef(0);
 
   // ── filter menu ────────────────────────────────────────────────────────────
   const toggleFilterMenu = () => {
@@ -129,10 +178,76 @@ export function App() {
     return () => document.removeEventListener('mousedown', handler);
   }, [menuVisible, menuClosing]);
 
+  const effectiveDirFilter = useMemo((): DirFilter | null => {
+    if (level3DirId) return { type: 'directory', id: level3DirId };
+    return dirFilter;
+  }, [level3DirId, dirFilter]);
+
+  const timeFilterRef = useRef(timeFilter);
+  const effectiveDirFilterRef = useRef(effectiveDirFilter);
+  timeFilterRef.current = timeFilter;
+  effectiveDirFilterRef.current = effectiveDirFilter;
+
   // ── data ───────────────────────────────────────────────────────────────────
   const loadItems = useCallback(async (tf: SmartViewKey | null, df: DirFilter | null) => {
     setItems(await getItems({ view: tf, dirFilter: df }));
   }, []);
+
+  function tryCompleteFlipSync() {
+    const s = completeFlipSyncRef.current;
+    if (!s.apiDone || !s.animDone) return;
+    completeFlipSyncRef.current = { apiDone: false, animDone: false };
+    void loadItems(timeFilterRef.current, effectiveDirFilterRef.current);
+  }
+
+  useLayoutEffect(() => {
+    const snap = completeFlipSnapshotRef.current;
+    if (!snap) return;
+    completeFlipSnapshotRef.current = null;
+
+    const el = document.querySelector(`[data-item-id="${snap.itemId}"]`) as HTMLElement | null;
+    if (!el) {
+      completeFlipSyncRef.current.animDone = true;
+      tryCompleteFlipSync();
+      return;
+    }
+
+    const lastRect = el.getBoundingClientRect();
+    const dy = snap.firstTop - lastRect.top;
+
+    if (Math.abs(dy) < 1) {
+      completeFlipSyncRef.current.animDone = true;
+      tryCompleteFlipSync();
+      return;
+    }
+
+    el.classList.add('item-morph--flip');
+    el.style.willChange = 'transform';
+    el.style.zIndex = '3';
+    el.style.position = 'relative';
+    el.style.transform = `translateY(${dy}px)`;
+    el.style.transition = 'none';
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        el.style.transition = 'transform 0.38s cubic-bezier(0.22, 1, 0.36, 1)';
+        el.style.transform = 'translateY(0)';
+        const onEnd = (e: TransitionEvent) => {
+          if (e.propertyName !== 'transform') return;
+          el.removeEventListener('transitionend', onEnd);
+          el.style.transition = '';
+          el.style.transform = '';
+          el.style.willChange = '';
+          el.style.zIndex = '';
+          el.style.position = '';
+          el.classList.remove('item-morph--flip');
+          completeFlipSyncRef.current.animDone = true;
+          tryCompleteFlipSync();
+        };
+        el.addEventListener('transitionend', onEnd);
+      });
+    });
+  }, [completeFlipTick, loadItems]);
 
   const refreshBootstrap = useCallback(async () => {
     try {
@@ -151,8 +266,17 @@ export function App() {
         const data = await getBootstrap();
         if (cancelled) return;
         setBootstrap(data);
-        bootstrapReady.current = true;
-        await loadItems('today', null);
+        const persisted = readPersistedDirSelection();
+        const restored = validatePersistedDirSelection(data.directories, persisted);
+        setDirFilter(restored.dirFilter);
+        setLevel3DirId(restored.level3DirId);
+        if (restored.dirFilter?.type === 'directory') {
+          const path = findPathToDir(data.directories, restored.dirFilter.id);
+          setExpandedDirs(new Set(path ?? []));
+        } else {
+          setExpandedDirs(new Set());
+        }
+        setIsBootstrapReady(true);
       } catch (e) {
         if (!cancelled) setErrorMessage((e as Error).message || '初始化失败');
       } finally {
@@ -164,21 +288,27 @@ export function App() {
   }, [loadItems]);
 
   useEffect(() => {
-    if (!bootstrapReady.current) return;
+    if (!isBootstrapReady) return;
     let cancelled = false;
     async function refresh() {
-      try { setErrorMessage(null); await loadItems(timeFilter, dirFilter); }
+      try { setErrorMessage(null); await loadItems(timeFilter, effectiveDirFilter); }
       catch (e) { if (!cancelled) setErrorMessage((e as Error).message || '加载失败'); }
     }
     void refresh();
     return () => { cancelled = true; };
-  }, [timeFilter, dirFilter, loadItems]);
+  }, [timeFilter, effectiveDirFilter, loadItems, isBootstrapReady]);
 
-  // 切换筛选条件时重置快速创建和 modal
+  useEffect(() => {
+    if (!isBootstrapReady) return;
+    writePersistedDirSelection({ dirFilter, level3DirId });
+  }, [dirFilter, level3DirId, isBootstrapReady]);
+
+  // 切换筛选条件时重置快速创建、modal（三级 tag 仅在用户切换时间/目录时清除，见 handle*，以便刷新后可恢复三级）
   useEffect(() => {
     setQuickTitle('');
     setModalItem(null);
     setCloseWarningActive(false);
+    setConfirmDeleteLevel3Id(null);
   }, [timeFilter, dirFilter]);
 
   // Esc
@@ -194,11 +324,13 @@ export function App() {
   function handleTimeFilterClick(view: SmartViewKey) {
     // 单选 + 可反选：再次点击取消
     setTimeFilter((prev) => (prev === view ? null : view));
+    setLevel3DirId(null);
   }
 
   function handleDirFilterClick(df: DirFilter) {
     if (dirFilterEquals(dirFilter, df)) return;
 
+    setLevel3DirId(null);
     setDirFilter(df);
 
     if (df.type === 'directory') {
@@ -211,25 +343,68 @@ export function App() {
 
   // ── derived ────────────────────────────────────────────────────────────────
   const visibleItems = useMemo(() => {
-    if (itemFilter === 'active') return items.filter((i) => i.progress !== 'done');
-    if (itemFilter === 'done') return items.filter((i) => i.progress === 'done');
-    return items;
+    if (itemFilter === 'active') {
+      return items.filter((i) => i.progress !== 'done');
+    }
+    if (itemFilter === 'done') {
+      return [...items.filter((i) => i.progress === 'done')].sort(compareDoneByCompletedAtDesc);
+    }
+    return sortItemsForListDisplay(items);
   }, [items, itemFilter]);
 
   const upcomingRangeLabel = bootstrap
     ? `${bootstrap.settings.recentRangeValue}${bootstrap.settings.recentRangeUnit === 'day' ? '天' : '周'}`
     : '';
 
-  // 头部标题：时间 · 根目录 · 子目录 · ... · 当前目录
+  // 头部标题：时间 · 目录路径（若选了三级 tag 则显示至三级）
   const activeViewLabel = useMemo(() => {
     const parts: string[] = [];
     if (timeFilter) parts.push(SMART_VIEW_LABELS[timeFilter]);
-    if (dirFilter?.type === 'directory' && bootstrap) {
-      const namePath = findDirNamePath(bootstrap.directories, dirFilter.id);
-      if (namePath) parts.push(...namePath);
+    if (bootstrap) {
+      const dirIdForLabel =
+        level3DirId ?? (dirFilter?.type === 'directory' ? dirFilter.id : null);
+      if (dirIdForLabel) {
+        const namePath = findDirNamePath(bootstrap.directories, dirIdForLabel);
+        if (namePath) parts.push(...namePath);
+      }
     }
     return parts.length > 0 ? parts.join(' · ') : '全部';
-  }, [timeFilter, dirFilter, bootstrap]);
+  }, [timeFilter, dirFilter, bootstrap, level3DirId]);
+
+  const level2SelectedNode = useMemo(() => {
+    if (!bootstrap || dirFilter?.type !== 'directory') return null;
+    const n = findDirectoryNode(bootstrap.directories, dirFilter.id);
+    return n && n.level === SIDEBAR_MAX_LEVEL ? n : null;
+  }, [bootstrap, dirFilter]);
+
+  useEffect(() => {
+    if (!level3DirId || !level2SelectedNode) return;
+    const ok = level2SelectedNode.children.some((c) => c.id === level3DirId);
+    if (!ok) setLevel3DirId(null);
+  }, [level2SelectedNode, level3DirId]);
+
+  // 二级子列表变化后，若确认中的 id 已不存在（例如已删除），清除确认态，避免错位显示「确认」
+  useEffect(() => {
+    if (!confirmDeleteLevel3Id || !level2SelectedNode) return;
+    const ok = level2SelectedNode.children.some((c) => c.id === confirmDeleteLevel3Id);
+    if (!ok) setConfirmDeleteLevel3Id(null);
+  }, [level2SelectedNode, confirmDeleteLevel3Id]);
+
+  useEffect(() => {
+    if (!confirmDeleteLevel3Id || modalItem) return;
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setConfirmDeleteLevel3Id(null);
+    };
+    document.addEventListener('keydown', onEsc);
+    return () => document.removeEventListener('keydown', onEsc);
+  }, [confirmDeleteLevel3Id, modalItem]);
+
+  useEffect(() => {
+    if (level3DirId) {
+      setIsAddingDir(false);
+      setNewDirName('');
+    }
+  }, [level3DirId]);
 
   // ── quick create handler ───────────────────────────────────────────────────
   async function handleQuickTitleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -238,9 +413,11 @@ export function App() {
     if (!quickTitle.trim()) return;
     try {
       setIsCreating(true); setErrorMessage(null);
+      const targetDirId =
+        level3DirId ?? (dirFilter?.type === 'directory' ? dirFilter.id : null);
       const newItem = await createItem({
         title: quickTitle.trim(),
-        directoryId: dirFilter?.type === 'directory' ? dirFilter.id : null,
+        directoryId: targetDirId,
         expectedAt: new Date().toISOString(),
       });
       setItems((prev) => [newItem, ...prev]);
@@ -305,19 +482,75 @@ export function App() {
         notes: detailDraft.notes.trim() === '' ? null : detailDraft.notes,
       });
       setModalItem(null);
-      await Promise.all([loadItems(timeFilter, dirFilter), refreshBootstrap()]);
+      await Promise.all([loadItems(timeFilter, effectiveDirFilter), refreshBootstrap()]);
     } catch (e) {
       setErrorMessage((e as Error).message || '保存失败');
     } finally { setIsDetailSaving(false); }
   }
 
   async function handleComplete(itemId: string) {
+    if (itemFilter !== 'all') {
+      try {
+        setErrorMessage(null);
+        if (modalItem?.id === itemId) setModalItem(null);
+        await completeItem(itemId);
+        await Promise.all([loadItems(timeFilter, effectiveDirFilter), refreshBootstrap()]);
+      } catch (e) {
+        setErrorMessage((e as Error).message || '完成操作失败');
+      }
+      return;
+    }
+
+    const rowEl = document.querySelector(`[data-item-id="${itemId}"]`) as HTMLElement | null;
+    const firstTop = rowEl?.getBoundingClientRect().top;
+    const useFlip = rowEl !== null && firstTop !== undefined;
+
+    if (useFlip) {
+      completeFlipSyncRef.current = { apiDone: false, animDone: false };
+    }
+
+    setItems((prev) => {
+      const updated = prev.map((i) =>
+        i.id === itemId
+          ? { ...i, progress: 'done' as const, completedAt: new Date().toISOString() }
+          : i
+      );
+      return sortItemsForListDisplay(updated);
+    });
+
+    if (useFlip) {
+      completeFlipSnapshotRef.current = { itemId, firstTop };
+      setCompleteFlipTick((t) => t + 1);
+    }
+
     try {
       setErrorMessage(null);
       if (modalItem?.id === itemId) setModalItem(null);
       await completeItem(itemId);
-      await Promise.all([loadItems(timeFilter, dirFilter), refreshBootstrap()]);
-    } catch (e) { setErrorMessage((e as Error).message || '完成操作失败'); }
+      await refreshBootstrap();
+      if (useFlip) {
+        completeFlipSyncRef.current.apiDone = true;
+        tryCompleteFlipSync();
+      } else {
+        await loadItems(timeFilter, effectiveDirFilter);
+      }
+    } catch (e) {
+      setErrorMessage((e as Error).message || '完成操作失败');
+      completeFlipSyncRef.current = { apiDone: false, animDone: false };
+      await loadItems(timeFilter, effectiveDirFilter);
+      completeFlipSnapshotRef.current = null;
+    }
+  }
+
+  async function handleAssignDirectoryFromPicker(itemId: string, directoryId: string | null) {
+    try {
+      setErrorMessage(null);
+      await patchItem(itemId, { directoryId });
+      setDirPicker(null);
+      await Promise.all([loadItems(timeFilter, effectiveDirFilter), refreshBootstrap()]);
+    } catch (e) {
+      setErrorMessage((e as Error).message || '更新目录失败');
+    }
   }
 
   // ── directory create handlers ──────────────────────────────────────────────
@@ -334,7 +567,8 @@ export function App() {
 
   async function handleConfirmAddDir() {
     if (!newDirName.trim()) return;
-    const parentId = dirFilter?.type === 'directory' ? dirFilter.id : null;
+    const parentId =
+      level3DirId ?? (dirFilter?.type === 'directory' ? dirFilter.id : null);
     const color = parentId === null ? randomDirColor() : null;
     try {
       setIsCreatingDir(true);
@@ -358,10 +592,42 @@ export function App() {
     return false;
   }
 
+  async function handleDeleteLevel3Dir(dirId: string) {
+    try {
+      setErrorMessage(null);
+      const wasSelectedL3 = level3DirId === dirId;
+      await deleteDirectory(dirId, 'move_to_parent');
+      if (wasSelectedL3) setLevel3DirId(null);
+      await refreshBootstrap();
+      const nextDf: DirFilter | null = wasSelectedL3
+        ? dirFilter
+        : level3DirId && level3DirId !== dirId
+          ? { type: 'directory', id: level3DirId }
+          : dirFilter;
+      await loadItems(timeFilter, nextDf);
+    } catch (e) {
+      setErrorMessage((e as Error).message || '删除目录失败');
+    } finally {
+      setConfirmDeleteLevel3Id(null);
+      level3DeleteConfirmReadyAtRef.current = 0;
+    }
+  }
+
+  function handleLevel3DeleteControl(e: React.SyntheticEvent, nodeId: string) {
+    e.stopPropagation();
+    if (confirmDeleteLevel3Id !== nodeId) {
+      setConfirmDeleteLevel3Id(nodeId);
+      level3DeleteConfirmReadyAtRef.current = Date.now() + 420;
+      return;
+    }
+    if (Date.now() < level3DeleteConfirmReadyAtRef.current) return;
+    void handleDeleteLevel3Dir(nodeId);
+  }
+
   async function handleDeleteDir(dirId: string) {
     try {
       setErrorMessage(null);
-      await deleteDirectory(dirId);
+      await deleteDirectory(dirId, 'move_to_inbox');
       setConfirmDeleteDirId(null);
       if (
         dirFilter?.type === 'directory' &&
@@ -370,17 +636,26 @@ export function App() {
         setDirFilter(null);
       }
       await refreshBootstrap();
+      if (level3DirId) {
+        const path = findPathToDir(bootstrap?.directories ?? [], level3DirId);
+        if (path?.includes(dirId)) setLevel3DirId(null);
+      }
     } catch (e) {
       setErrorMessage((e as Error).message || '删除目录失败');
     }
   }
 
-  // ── directory nodes ────────────────────────────────────────────────────────
+  function handleLevel3TagClick(nodeId: string) {
+    setLevel3DirId((prev) => (prev === nodeId ? null : nodeId));
+  }
+
+  // ── directory nodes（侧栏仅展示 level ≤ 2；三级在主页 tag）──────────────────
   function renderDirNodes(nodes: DirectoryNode[], depth: number): React.ReactNode {
     return nodes.map((node) => {
       const isActive = dirFilter?.type === 'directory' && dirFilter.id === node.id;
       const isExpanded = expandedDirs.has(node.id);
-      const hasChildren = node.children.length > 0;
+      const showNestedInSidebar = node.level < SIDEBAR_MAX_LEVEL;
+      const hasChildrenInSidebar = showNestedInSidebar && node.children.length > 0;
       const isConfirming = confirmDeleteDirId === node.id;
 
       return (
@@ -420,7 +695,7 @@ export function App() {
               )}
             </span>
           </button>
-          {hasChildren && (
+          {hasChildrenInSidebar && (
             <div className={`dir-children-wrapper${isExpanded ? ' is-expanded' : ''}`}>
               <ul className="dir-children">
                 {renderDirNodes(node.children, depth + 1)}
@@ -506,7 +781,11 @@ export function App() {
               <button
                 type="button"
                 className={`nav-list__item${dirFilter === null ? ' is-active' : ''}`}
-                onClick={() => { setDirFilter(null); setExpandedDirs(new Set()); }}
+                onClick={() => {
+                  setDirFilter(null);
+                  setExpandedDirs(new Set());
+                  setLevel3DirId(null);
+                }}
               >
                 <span>全部</span>
               </button>
@@ -522,7 +801,8 @@ export function App() {
           <div className="content__header-left">
             <div className="content__header-title-row">
               <h2>{activeViewLabel}</h2>
-              {isAddingDir ? (
+              {/* 三级为最深目录：选中三级时不显示「添加目录」 */}
+              {!level3DirId && (isAddingDir ? (
                 <div className="dir-add-inline">
                   <input
                     ref={addDirInputRef}
@@ -560,7 +840,7 @@ export function App() {
                     <path d="M10 9v4M8 11h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
                   </svg>
                 </button>
-              )}
+              ))}
             </div>
           </div>
           <div className="filter-dropdown" ref={dropdownRef}>
@@ -584,6 +864,54 @@ export function App() {
         {isLoading ? <p>正在加载数据...</p> : null}
         {errorMessage ? <p className="error-message">{errorMessage}</p> : null}
 
+        {level2SelectedNode && level2SelectedNode.children.length > 0 ? (
+          <div className="dir-tag-row" role="toolbar" aria-label="三级目录">
+            {level2SelectedNode.children.map((node) => {
+              const isTagActive = level3DirId === node.id;
+              const isConfirmingL3 = confirmDeleteLevel3Id === node.id;
+              return (
+                <div
+                  key={node.id}
+                  className={`dir-tag-wrap dir-tag-wrap--deletable${isTagActive ? ' is-active' : ''}${isConfirmingL3 ? ' is-confirming' : ''}`}
+                >
+                  <button
+                    type="button"
+                    className="dir-tag__main"
+                    aria-pressed={isTagActive}
+                    onClick={() => handleLevel3TagClick(node.id)}
+                  >
+                    {node.color ? (
+                      <span className="category-dot" style={{ background: node.color }} />
+                    ) : null}
+                    <span>{node.name}</span>
+                    {node.activeCount > 0 ? (
+                      <span className="dir-inline-count">({node.activeCount})</span>
+                    ) : null}
+                  </button>
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    className={`dir-delete-btn${isConfirmingL3 ? ' dir-delete-btn--confirm' : ''}`}
+                    onClick={(e) => handleLevel3DeleteControl(e, node.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.stopPropagation();
+                        handleLevel3DeleteControl(e, node.id);
+                      }
+                    }}
+                  >
+                    {isConfirmingL3 ? '确认' : (
+                      <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M3 4h10M6 4V3h4v1M5 4l.5 8h5L11 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    )}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+
         <div className="quick-create-row">
           <input
             className="header-quick-input"
@@ -598,12 +926,38 @@ export function App() {
         </div>
 
         <section className="list">
-          {visibleItems.map((item) => (
+          {visibleItems.map((item) => {
+            const accentColor =
+              bootstrap && item.directoryId
+                ? findDirectoryAccentColor(bootstrap.directories, item.directoryId)
+                : null;
+            return (
             <div
               key={item.id}
+              data-item-id={item.id}
               className={`item-morph${item.progress === 'done' ? ' item-morph--done' : ''}`}
               onClick={(e) => handleSelectItem(item, e)}
             >
+              <button
+                type="button"
+                className={`item-morph__accent${!accentColor ? ' item-morph__accent--placeholder' : ''}`}
+                style={accentColor ? { backgroundColor: accentColor } : undefined}
+                aria-label="分配目录"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!bootstrap) return;
+                  const r = e.currentTarget.getBoundingClientRect();
+                  setDirPicker({
+                    itemId: item.id,
+                    anchor: {
+                      left: r.left,
+                      top: r.top,
+                      width: r.width,
+                      height: r.height,
+                    },
+                  });
+                }}
+              />
               <div className="item-morph__card-face">
                 <div className="card__body">
                   <div className="card__title-row">
@@ -625,11 +979,23 @@ export function App() {
                 </div>
               </div>
             </div>
-          ))}
+            );
+          })}
         </section>
       </main>
 
       {/* Modal */}
+      {dirPicker && bootstrap ? (
+        <DirectoryCascadePicker
+          key={dirPicker.itemId}
+          roots={bootstrap.directories}
+          anchor={dirPicker.anchor}
+          initialDirectoryId={items.find((i) => i.id === dirPicker.itemId)?.directoryId ?? null}
+          onClose={() => setDirPicker(null)}
+          onConfirm={(directoryId) => void handleAssignDirectoryFromPicker(dirPicker.itemId, directoryId)}
+        />
+      ) : null}
+
       {modalItem && (
         <div className="modal-overlay" onClick={tryCloseModal}>
           <div className="modal-dialog" style={{ transformOrigin: modalOrigin }} onClick={(e) => e.stopPropagation()}>

@@ -1,10 +1,14 @@
 package com.vampeng.mypag.common;
 
 import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.Statement;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HashSet;
+import java.util.Set;
 
 import javax.sql.DataSource;
 
@@ -38,50 +42,61 @@ public class DbMigrationsRunner implements ApplicationRunner {
         Arrays.sort(migrations, Comparator.comparing(Resource::getFilename));
 
         try (Connection connection = dataSource.getConnection()) {
-            ensureMigrationsTable(connection, migrations);
-            for (Resource migration : migrations) {
-                String filename = migration.getFilename();
-                if (!isApplied(connection, filename)) {
-                    ScriptUtils.executeSqlScript(connection, new EncodedResource(migration));
-                    markApplied(connection, filename);
+            boolean schemaTableIsNew = !tableExists(connection, "schema_migrations");
+
+            try (Statement stmt = connection.createStatement()) {
+                stmt.execute("""
+                        CREATE TABLE IF NOT EXISTS schema_migrations (
+                            filename TEXT PRIMARY KEY,
+                            applied_at TEXT NOT NULL
+                        )
+                        """);
+            }
+
+            if (schemaTableIsNew && tableExists(connection, "accounts")) {
+                // Existing database predates migration tracking — baseline all files as already applied.
+                for (Resource migration : migrations) {
+                    insertMigrationRecord(connection, migration.getFilename());
                 }
             }
-        }
-    }
 
-    private void ensureMigrationsTable(Connection connection, Resource[] migrations) throws Exception {
-        connection.createStatement().execute(
-            "CREATE TABLE IF NOT EXISTS schema_migrations (filename TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
-        );
-        // Baseline: if schema_migrations is empty but the DB already has application tables,
-        // mark all existing migration files as applied so they are not re-run.
-        boolean migrationsEmpty = !connection.createStatement()
-            .executeQuery("SELECT 1 FROM schema_migrations LIMIT 1").next();
-        if (migrationsEmpty && tableExists(connection, "accounts")) {
+            Set<String> applied = loadAppliedMigrations(connection);
+
             for (Resource migration : migrations) {
-                markApplied(connection, migration.getFilename());
+                String filename = migration.getFilename();
+                if (applied.contains(filename)) {
+                    continue;
+                }
+                ScriptUtils.executeSqlScript(connection, new EncodedResource(migration));
+                insertMigrationRecord(connection, filename);
             }
         }
     }
 
     private boolean tableExists(Connection connection, String tableName) throws Exception {
-        var rs = connection.createStatement().executeQuery(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='" + tableName.replace("'", "''") + "'"
-        );
-        return rs.next();
+        try (Statement stmt = connection.createStatement();
+             ResultSet rs = stmt.executeQuery(
+                     "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='" + tableName + "'")) {
+            return rs.next() && rs.getInt(1) > 0;
+        }
     }
 
-    private boolean isApplied(Connection connection, String filename) throws Exception {
-        var rs = connection.createStatement().executeQuery(
-            "SELECT 1 FROM schema_migrations WHERE filename = '" + filename.replace("'", "''") + "'"
-        );
-        return rs.next();
+    private Set<String> loadAppliedMigrations(Connection connection) throws Exception {
+        Set<String> applied = new HashSet<>();
+        try (Statement stmt = connection.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT filename FROM schema_migrations")) {
+            while (rs.next()) {
+                applied.add(rs.getString("filename"));
+            }
+        }
+        return applied;
     }
 
-    private void markApplied(Connection connection, String filename) throws Exception {
-        connection.createStatement().execute(
-            "INSERT OR IGNORE INTO schema_migrations (filename, applied_at) VALUES ('" + filename.replace("'", "''") + "', '" + java.time.Instant.now() + "')"
-        );
+    private void insertMigrationRecord(Connection connection, String filename) throws Exception {
+        try (Statement stmt = connection.createStatement()) {
+            stmt.execute("INSERT OR IGNORE INTO schema_migrations (filename, applied_at) VALUES ('"
+                    + filename + "', datetime('now'))");
+        }
     }
 
     private void ensureParentDirectoryExistsForSqlite() throws Exception {

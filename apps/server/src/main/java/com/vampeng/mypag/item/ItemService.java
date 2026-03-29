@@ -1,6 +1,8 @@
 package com.vampeng.mypag.item;
 
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Locale;
@@ -13,25 +15,31 @@ import org.springframework.web.server.ResponseStatusException;
 
 import com.vampeng.mypag.account.CurrentAccountService;
 import com.vampeng.mypag.directory.DirectoryRepository;
+import com.vampeng.mypag.setting.SettingsService;
 
 @Service
 public class ItemService {
 
+    private static final ZoneId APP_ZONE = ZoneId.of("Asia/Shanghai");
     private static final Set<String> ALLOWED_PROGRESS = Set.of("todo", "doing", "done", "paused");
     private static final Set<String> ALLOWED_PRIORITY = Set.of("low", "medium", "high");
+    private static final Set<String> ALLOWED_VIEWS = Set.of("today", "upcoming", "overdue");
 
     private final CurrentAccountService currentAccountService;
     private final DirectoryRepository directoryRepository;
     private final ItemRepository itemRepository;
+    private final SettingsService settingsService;
 
     public ItemService(
             CurrentAccountService currentAccountService,
             DirectoryRepository directoryRepository,
-            ItemRepository itemRepository
+            ItemRepository itemRepository,
+            SettingsService settingsService
     ) {
         this.currentAccountService = currentAccountService;
         this.directoryRepository = directoryRepository;
         this.itemRepository = itemRepository;
+        this.settingsService = settingsService;
     }
 
     @Transactional
@@ -70,14 +78,56 @@ public class ItemService {
         String accountId = currentAccountService.ensureCurrentAccount().id();
         String progress = query.progress() == null ? null : normalizeProgress(query.progress(), null);
         String priority = query.priority() == null ? null : normalizePriority(query.priority());
-        String directoryId = normalizeDirectoryId(accountId, query.directoryId());
+
+        // Directory filter: "unclassified" is a magic value meaning directory_id IS NULL
+        boolean unclassifiedOnly = "unclassified".equals(query.directoryId());
+        List<String> directoryIds = null;
+        if (!unclassifiedOnly && query.directoryId() != null && !query.directoryId().isBlank()) {
+            String dirId = query.directoryId().trim();
+            if (directoryRepository.findActiveById(accountId, dirId).isEmpty()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "directory not found");
+            }
+            directoryIds = directoryRepository.findActiveSubtreeIds(accountId, dirId);
+        }
+
+        // Time filter: compute range based on view type
+        String viewType = null;
+        String rangeStart = null;
+        String rangeEnd = null;
+        if (query.view() != null && ALLOWED_VIEWS.contains(query.view())) {
+            viewType = query.view();
+            if ("today".equals(viewType)) {
+                LocalDate today = LocalDate.now(APP_ZONE);
+                rangeStart = today.atStartOfDay(APP_ZONE).toInstant().toString();
+                rangeEnd = today.plusDays(1).atStartOfDay(APP_ZONE).toInstant().toString();
+            } else if ("upcoming".equals(viewType)) {
+                SettingsService.SettingsResponse settings = settingsService.getCurrentSettings();
+                Instant now = Instant.now();
+                rangeStart = now.toString();
+                rangeEnd = now.plusSeconds(toSeconds(settings.recentRangeValue(), settings.recentRangeUnit())).toString();
+            } else if ("overdue".equals(viewType)) {
+                rangeStart = Instant.now().toString();
+            }
+        }
 
         return itemRepository.list(accountId, new ItemRepository.ListFilter(
                 query.q(),
                 progress,
                 priority,
-                directoryId
+                directoryIds,
+                unclassifiedOnly,
+                viewType,
+                rangeStart,
+                rangeEnd
         )).stream().map(this::toResponse).toList();
+    }
+
+    private long toSeconds(int value, String unit) {
+        return switch (unit) {
+            case "week" -> value * 7L * 24 * 3600;
+            case "day" -> value * 24L * 3600;
+            default -> throw new IllegalStateException("unsupported recentRangeUnit: " + unit);
+        };
     }
 
     @Transactional
@@ -286,7 +336,8 @@ public class ItemService {
             String q,
             String progress,
             String priority,
-            String directoryId
+            String directoryId,
+            String view
     ) {
     }
 

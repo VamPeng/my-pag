@@ -230,6 +230,31 @@ public class DirectoryRepository {
         jdbcTemplate.update(sql, args);
     }
 
+    /**
+     * 将目录子树内所有条目的 directory_id 设为指定目录（用于删除子目录时把任务挪到父目录）。
+     */
+    public void moveItemsToDirectory(String accountId, List<String> fromDirectoryIds, String targetDirectoryId) {
+        if (fromDirectoryIds.isEmpty()) {
+            return;
+        }
+        String placeholders = fromDirectoryIds.stream().map(id -> "?").collect(Collectors.joining(","));
+        String sql = """
+                UPDATE items
+                SET directory_id = ?, updated_at = ?
+                WHERE account_id = ? AND directory_id IN (%s) AND trashed_at IS NULL
+                """.formatted(placeholders);
+
+        Object[] args = new Object[3 + fromDirectoryIds.size()];
+        String now = Instant.now().toString();
+        args[0] = targetDirectoryId;
+        args[1] = now;
+        args[2] = accountId;
+        for (int i = 0; i < fromDirectoryIds.size(); i++) {
+            args[i + 3] = fromDirectoryIds.get(i);
+        }
+        jdbcTemplate.update(sql, args);
+    }
+
     public void trashItems(String accountId, List<String> directoryIds) {
         if (directoryIds.isEmpty()) {
             return;

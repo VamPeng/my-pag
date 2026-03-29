@@ -16,6 +16,37 @@ public class ViewRepository {
         this.jdbcTemplate = jdbcTemplate;
     }
 
+    public int unclassifiedCount(String accountId) {
+        Integer count = jdbcTemplate.queryForObject(
+                """
+                SELECT COUNT(*) FROM items
+                WHERE account_id = ?
+                  AND directory_id IS NULL
+                  AND trashed_at IS NULL
+                  AND progress != 'done'
+                """,
+                Integer.class,
+                accountId
+        );
+        return count == null ? 0 : count;
+    }
+
+    public List<ViewItemRecord> unclassified(String accountId) {
+        return jdbcTemplate.query(
+                """
+                SELECT id, account_id, directory_id, title, notes, progress,
+                       priority, expected_at, completed_at, trashed_at, created_at, updated_at
+                FROM items
+                WHERE account_id = ?
+                  AND directory_id IS NULL
+                  AND trashed_at IS NULL
+                ORDER BY created_at DESC
+                """,
+                this::mapRow,
+                accountId
+        );
+    }
+
     public List<ViewItemRecord> inbox(String accountId) {
         return jdbcTemplate.query(
                 """

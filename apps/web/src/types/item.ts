@@ -1,7 +1,7 @@
 export type ItemProgress = 'todo' | 'doing' | 'done' | 'paused';
 export type ItemPriority = 'low' | 'medium' | 'high' | null;
 export type RecentRangeUnit = 'day' | 'week';
-export type SmartViewKey = 'inbox' | 'today' | 'upcoming' | 'overdue';
+export type SmartViewKey = 'today' | 'upcoming' | 'overdue';
 
 export interface ItemSummary {
   id: string;
@@ -21,16 +21,12 @@ export interface DirectoryNode {
   id: string;
   parentId: string | null;
   name: string;
-  sortOrder: number;
   color: string | null;
+  sortOrder: number;
   activeCount: number;
   level: number;
   children: DirectoryNode[];
 }
-
-export type DirFilter =
-  | { type: 'directory'; id: string }
-  | { type: 'unclassified' };
 
 export interface SettingsData {
   recentRangeValue: number;
@@ -44,16 +40,19 @@ export interface BootstrapData {
     status: string;
   };
   settings: SettingsData;
-  directories: DirectoryNode[];
   unclassifiedCount: number;
+  directories: DirectoryNode[];
 }
 
 export const SMART_VIEW_LABELS: Record<SmartViewKey, string> = {
-  inbox: '收件箱',
   today: '今天',
   upcoming: '近期',
   overdue: '逾期',
 };
+
+export type DirFilter =
+  | { type: 'unclassified' }
+  | { type: 'directory'; id: string };
 
 export const ITEM_PROGRESS_LABELS: Record<ItemProgress, string> = {
   todo: '未开始',

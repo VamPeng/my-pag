@@ -90,13 +90,23 @@ public class DirectoryService {
         String accountId = currentAccountService.ensureCurrentAccount().id();
         DeleteMode deleteMode = DeleteMode.from(mode);
 
-        directoryRepository.findActiveById(accountId, directoryId)
+        var record = directoryRepository.findActiveById(accountId, directoryId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "directory not found"));
 
         List<String> subtreeIds = directoryRepository.findActiveSubtreeIds(accountId, directoryId);
 
         if (deleteMode == DeleteMode.MOVE_TO_INBOX) {
             directoryRepository.moveItemsToInbox(accountId, subtreeIds);
+        } else if (deleteMode == DeleteMode.MOVE_TO_PARENT) {
+            String parentId = record.parentId();
+            if (parentId == null || parentId.isBlank()) {
+                directoryRepository.moveItemsToInbox(accountId, subtreeIds);
+            } else if (directoryRepository.findActiveById(accountId, parentId).isEmpty()) {
+                // 父目录已删除或数据不一致：任务归入未分类，避免 400
+                directoryRepository.moveItemsToInbox(accountId, subtreeIds);
+            } else {
+                directoryRepository.moveItemsToDirectory(accountId, subtreeIds, parentId);
+            }
         } else {
             directoryRepository.trashItems(accountId, subtreeIds);
         }
@@ -166,6 +176,8 @@ public class DirectoryService {
 
     public enum DeleteMode {
         MOVE_TO_INBOX("move_to_inbox"),
+        /** 删除目录前，将其子树内所有任务移到该目录的父目录 */
+        MOVE_TO_PARENT("move_to_parent"),
         DELETE_WITH_ITEMS("delete_with_items");
 
         private final String value;
@@ -175,8 +187,12 @@ public class DirectoryService {
         }
 
         public static DeleteMode from(String modeValue) {
+            if (modeValue == null || modeValue.isBlank()) {
+                return MOVE_TO_INBOX;
+            }
+            String v = modeValue.trim();
             for (DeleteMode mode : values()) {
-                if (Objects.equals(mode.value, modeValue)) {
+                if (Objects.equals(mode.value, v)) {
                     return mode;
                 }
             }

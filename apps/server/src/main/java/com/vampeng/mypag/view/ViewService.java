@@ -31,6 +31,12 @@ public class ViewService {
     }
 
     @Transactional(readOnly = true)
+    public List<ViewItemResponse> unclassified() {
+        String accountId = currentAccountService.ensureCurrentAccount().id();
+        return viewRepository.unclassified(accountId).stream().map(this::toResponse).toList();
+    }
+
+    @Transactional(readOnly = true)
     public List<ViewItemResponse> inbox() {
         String accountId = currentAccountService.ensureCurrentAccount().id();
         return viewRepository.inbox(accountId).stream().map(this::toResponse).toList();
