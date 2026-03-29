@@ -185,8 +185,8 @@ button {
   grid-template-rows: 0fr;
   margin-left: 14px;
   border-left: 2px solid transparent;
-  transition: grid-template-rows 0.22s cubic-bezier(0.4, 0, 0.2, 1),
-              border-color 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: grid-template-rows 0.25s cubic-bezier(0, 0, 0.2, 1),
+              border-color 0.25s cubic-bezier(0, 0, 0.2, 1);
 }
 
 .dir-children-wrapper.is-expanded {
