@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   completeItem,
+  createDirectory,
   createItem,
   deleteDirectory,
   getBootstrap,
@@ -68,6 +69,12 @@ export function App() {
 
   // ── directory delete confirm ───────────────────────────────────────────────
   const [confirmDeleteDirId, setConfirmDeleteDirId] = useState<string | null>(null);
+
+  // ── add directory ──────────────────────────────────────────────────────────
+  const [isAddingDir, setIsAddingDir] = useState(false);
+  const [newDirName, setNewDirName] = useState('');
+  const [isCreatingDir, setIsCreatingDir] = useState(false);
+  const addDirInputRef = useRef<HTMLInputElement>(null);
 
   // ── modal detail ───────────────────────────────────────────────────────────
   const [modalItem, setModalItem] = useState<ItemSummary | null>(null);
@@ -296,6 +303,34 @@ export function App() {
     } catch (e) { setErrorMessage((e as Error).message || '完成操作失败'); }
   }
 
+  // ── directory create handlers ──────────────────────────────────────────────
+  function openAddDir() {
+    setIsAddingDir(true);
+    setNewDirName('');
+    setTimeout(() => addDirInputRef.current?.focus(), 0);
+  }
+
+  function cancelAddDir() {
+    setIsAddingDir(false);
+    setNewDirName('');
+  }
+
+  async function handleConfirmAddDir() {
+    if (!newDirName.trim()) return;
+    const parentId = dirFilter?.type === 'directory' ? dirFilter.id : null;
+    try {
+      setIsCreatingDir(true);
+      await createDirectory({ name: newDirName.trim(), parentId });
+      setIsAddingDir(false);
+      setNewDirName('');
+      await refreshBootstrap();
+    } catch (e) {
+      setErrorMessage((e as Error).message || '创建目录失败');
+    } finally {
+      setIsCreatingDir(false);
+    }
+  }
+
   // ── directory delete ──────────────────────────────────────────────────────
   function isInSubtree(targetId: string, rootId: string, nodes: DirectoryNode[]): boolean {
     for (const node of nodes) {
@@ -472,16 +507,45 @@ export function App() {
           <div className="content__header-left">
             <div className="content__header-title-row">
               <h2>{activeViewLabel}</h2>
-              <input
-                className="header-quick-input"
-                aria-label="新建计划标题"
-                placeholder={isCreating ? '创建中...' : 'new plan...'}
-                type="text"
-                value={quickTitle}
-                disabled={isCreating}
-                onChange={(e) => setQuickTitle(e.target.value)}
-                onKeyDown={(e) => void handleQuickTitleKeyDown(e)}
-              />
+              {isAddingDir ? (
+                <div className="dir-add-inline">
+                  <input
+                    ref={addDirInputRef}
+                    className="dir-add-inline__input"
+                    type="text"
+                    placeholder="目录名称..."
+                    value={newDirName}
+                    disabled={isCreatingDir}
+                    onChange={(e) => setNewDirName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void handleConfirmAddDir();
+                      if (e.key === 'Escape') cancelAddDir();
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="dir-add-inline__confirm"
+                    disabled={isCreatingDir || !newDirName.trim()}
+                    onClick={() => void handleConfirmAddDir()}
+                  >
+                    <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M3 8l4 4 6-7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  </button>
+                  <button type="button" className="dir-add-inline__cancel" disabled={isCreatingDir} onClick={cancelAddDir}>
+                    <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+                    </svg>
+                  </button>
+                </div>
+              ) : (
+                <button type="button" className="dir-add-icon-btn" onClick={openAddDir} aria-label="添加目录">
+                  <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M2 6a2 2 0 012-2h3.586a1 1 0 01.707.293L9.707 5.7A1 1 0 0010.414 6H16a2 2 0 012 2v7a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
+                    <path d="M10 9v4M8 11h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                  </svg>
+                </button>
+              )}
             </div>
           </div>
           <div className="filter-dropdown" ref={dropdownRef}>
@@ -504,6 +568,19 @@ export function App() {
 
         {isLoading ? <p>正在加载数据...</p> : null}
         {errorMessage ? <p className="error-message">{errorMessage}</p> : null}
+
+        <div className="quick-create-row">
+          <input
+            className="header-quick-input"
+            aria-label="新建计划标题"
+            placeholder={isCreating ? '创建中...' : 'new plan...'}
+            type="text"
+            value={quickTitle}
+            disabled={isCreating}
+            onChange={(e) => setQuickTitle(e.target.value)}
+            onKeyDown={(e) => void handleQuickTitleKeyDown(e)}
+          />
+        </div>
 
         <section className="list">
           {visibleItems.map((item) => (
