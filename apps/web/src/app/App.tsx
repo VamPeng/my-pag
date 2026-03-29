@@ -30,6 +30,15 @@ function findDirName(nodes: DirectoryNode[], id: string): string {
   return '';
 }
 
+function findPathToDir(nodes: DirectoryNode[], targetId: string): string[] | null {
+  for (const node of nodes) {
+    if (node.id === targetId) return [node.id];
+    const childPath = findPathToDir(node.children, targetId);
+    if (childPath) return [node.id, ...childPath];
+  }
+  return null;
+}
+
 function dirFilterEquals(a: DirFilter | null, b: DirFilter | null): boolean {
   if (a === null && b === null) return true;
   if (a === null || b === null) return false;
@@ -51,14 +60,6 @@ export function App() {
   const [itemFilter, setItemFilter] = useState<'all' | 'active' | 'done'>('all');
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
 
-  function toggleDir(id: string) {
-    setExpandedDirs((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
   const [menuVisible, setMenuVisible] = useState(false);
   const [menuClosing, setMenuClosing] = useState(false);
 
@@ -171,8 +172,16 @@ export function App() {
   }
 
   function handleDirFilterClick(df: DirFilter) {
-    // 单选 + 可反选：再次点击取消
-    setDirFilter((prev) => (dirFilterEquals(prev, df) ? null : df));
+    if (dirFilterEquals(dirFilter, df)) return;
+
+    setDirFilter(df);
+
+    if (df.type === 'directory') {
+      const path = findPathToDir(bootstrap!.directories, df.id);
+      setExpandedDirs(new Set(path ?? []));
+    } else {
+      setExpandedDirs(new Set());
+    }
   }
 
   // ── derived ────────────────────────────────────────────────────────────────
@@ -327,10 +336,7 @@ export function App() {
           <button
             type="button"
             className={`nav-list__item${depth > 0 ? ' nav-list__item--child' : ''}${isActive ? ' is-active' : ''} nav-list__item--deletable${isConfirming ? ' is-confirming' : ''}`}
-            onClick={() => {
-              handleDirFilterClick({ type: 'directory', id: node.id });
-              if (hasChildren) toggleDir(node.id);
-            }}
+            onClick={() => handleDirFilterClick({ type: 'directory', id: node.id })}
             onMouseLeave={() => setConfirmDeleteDirId(null)}
           >
             <span className="dir-root__label">
