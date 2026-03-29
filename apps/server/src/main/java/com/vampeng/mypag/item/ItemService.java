@@ -102,11 +102,15 @@ public class ItemService {
                 rangeEnd = today.plusDays(1).atStartOfDay(APP_ZONE).toInstant().toString();
             } else if ("upcoming".equals(viewType)) {
                 SettingsService.SettingsResponse settings = settingsService.getCurrentSettings();
-                Instant now = Instant.now();
-                rangeStart = now.toString();
-                rangeEnd = now.plusSeconds(toSeconds(settings.recentRangeValue(), settings.recentRangeUnit())).toString();
+                // 从「今天 0 点」起算近期窗口，包含今日整日；上界为起算点 + 设置的天/周时长
+                LocalDate today = LocalDate.now(APP_ZONE);
+                Instant windowStart = today.atStartOfDay(APP_ZONE).toInstant();
+                rangeStart = windowStart.toString();
+                rangeEnd = windowStart.plusSeconds(toSeconds(settings.recentRangeValue(), settings.recentRangeUnit())).toString();
             } else if ("overdue".equals(viewType)) {
-                rangeStart = Instant.now().toString();
+                // 早于「今天」0 点的计划日才算逾期，与 today（今日整日窗口）互斥
+                LocalDate today = LocalDate.now(APP_ZONE);
+                rangeStart = today.atStartOfDay(APP_ZONE).toInstant().toString();
             }
         }
 

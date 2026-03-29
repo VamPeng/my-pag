@@ -33,8 +33,7 @@ button {
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
   min-height: 100vh;
-  gap: 1px;
-  background: var(--md-sys-color-outline-variant);
+  gap: 0;
 }
 
 .sidebar,
@@ -252,7 +251,7 @@ button {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  padding: 0 0 22px;
+  padding: 0 0 22px 4px;
 }
 
 .dir-tag-wrap {
@@ -262,7 +261,7 @@ button {
   max-width: 100%;
   border: 1px solid var(--md-sys-color-outline-variant);
   border-radius: 8px;
-  padding: 0 4px 0 0;
+  padding: 0 4px 0 8px;
   background: var(--md-sys-color-surface-container-low);
   color: var(--md-sys-color-on-surface-variant);
   font-size: 0.8125rem;
@@ -290,17 +289,13 @@ button {
   color: inherit;
   font: inherit;
   font-weight: 500;
-  padding: 6px 4px 6px 12px;
+  padding: 6px 4px 6px 14px;
   border-radius: 7px;
   cursor: pointer;
   text-align: left;
 }
 
 .dir-tag-wrap--deletable:hover .dir-delete-btn {
-  visibility: visible;
-}
-
-.dir-tag-wrap.is-confirming .dir-delete-btn {
   visibility: visible;
 }
 
@@ -858,10 +853,12 @@ button.item-morph__accent {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
 }
 
 .card__title {
   flex: 1;
+  min-width: 0;
   margin: 0;
   font-size: 0.95rem;
   font-weight: 600;
@@ -870,16 +867,161 @@ button.item-morph__accent {
   text-overflow: ellipsis;
 }
 
+button.card__expected-at {
+  flex-shrink: 0;
+  margin: 0;
+  border: none;
+  padding: 0;
+  background: none;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  color: var(--md-sys-color-on-surface-variant);
+  white-space: nowrap;
+  cursor: pointer;
+  text-align: right;
+  border-radius: 4px;
+}
+
+button.card__expected-at:hover {
+  color: var(--md-sys-color-primary);
+}
+
+button.card__expected-at:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+.card__expected-at--placeholder {
+  font-weight: 500;
+  opacity: 0.65;
+  font-style: italic;
+}
+
+button.card__expected-at.card__expected-at--placeholder:hover {
+  opacity: 0.95;
+}
+
+/* 与删除目录弹框同壳：预计完成时间 */
+.expected-at-dialog__label {
+  display: block;
+  margin: 4px 0 0;
+  font-size: 0.8125rem;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.expected-at-dialog__input {
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-low);
+  color: var(--md-sys-color-on-surface);
+  font-size: 0.9375rem;
+  font-family: inherit;
+}
+
+.expected-at-dialog__input:focus {
+  outline: none;
+  border-color: var(--md-sys-color-primary);
+}
+
+.expected-at-dialog__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  margin-top: 20px;
+}
+
 .card__excerpt {
   margin: 6px 0 0;
   padding-left: 28px; /* checkbox 18px + gap 10px */
+  min-width: 0;
   font-size: 0.82rem;
   color: var(--md-sys-color-on-surface-variant);
   line-height: 1.45;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  /* 保留 \n：多行时只显示第一行，其余用 … 表示详情里还有内容 */
+  white-space: pre-line;
   overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+  overflow-wrap: anywhere;
+}
+
+/* ── 删除目录确认弹框（侧栏与三级 tag 共用） ─────────────────────────────── */
+
+.delete-dir-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 160;
+  padding: 24px;
+  animation: overlay-in 200ms ease forwards;
+}
+
+.delete-dir-dialog {
+  width: min(400px, 100%);
+  background: var(--md-sys-color-surface-container-lowest);
+  border-radius: 16px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.18);
+  padding: 24px;
+}
+
+.delete-dir-dialog__title {
+  margin: 0 0 12px;
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--md-sys-color-on-surface);
+}
+
+.delete-dir-dialog__body {
+  margin: 0 0 20px;
+  font-size: 0.9rem;
+  color: var(--md-sys-color-on-surface-variant);
+  line-height: 1.5;
+}
+
+.delete-dir-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.delete-dir-dialog__cancel {
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--md-sys-color-on-surface);
+  padding: 10px 18px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.875rem;
+}
+
+.delete-dir-dialog__danger {
+  border: none;
+  border-radius: 999px;
+  background: var(--md-sys-color-error);
+  color: var(--md-sys-color-on-error);
+  padding: 10px 18px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.875rem;
 }
 
 
@@ -1026,27 +1168,6 @@ button.item-morph__accent {
   background: color-mix(in srgb, var(--md-sys-color-error) 12%, transparent);
   color: var(--md-sys-color-error);
 }
-
-/* 确认状态：不依赖 hover，始终显示确认按钮 */
-.nav-list__item.is-confirming .dir-delete-btn {
-  visibility: visible;
-}
-
-.dir-delete-btn--confirm {
-  width: auto;
-  padding: 2px 8px;
-  font-size: 0.78rem;
-  font-weight: 700;
-  background: var(--md-sys-color-error);
-  color: var(--md-sys-color-on-error);
-  border-radius: 6px;
-  white-space: nowrap;
-}
-
-.dir-delete-btn--confirm:hover {
-  opacity: 0.85;
-}
-
 
 @media (max-width: 768px) {
   .shell {

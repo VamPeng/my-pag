@@ -14,6 +14,11 @@ import {
   validatePersistedDirSelection,
   writePersistedDirSelection,
 } from '../services/directorySelectionStorage';
+import {
+  datetimeLocalInputValueToIso,
+  formatExpectedAtDisplay,
+  isoToDatetimeLocalInputValue,
+} from '../utils/formatExpectedAt';
 import { compareDoneByCompletedAtDesc, sortItemsForListDisplay } from '../utils/itemListSort';
 import { DirectoryCascadePicker, type DirPickerAnchor } from '../components/DirectoryCascadePicker';
 import {
@@ -123,9 +128,19 @@ export function App() {
   const [quickTitle, setQuickTitle] = useState('');
   const [isCreating, setIsCreating] = useState(false);
 
-  // ── directory delete confirm ───────────────────────────────────────────────
-  const [confirmDeleteDirId, setConfirmDeleteDirId] = useState<string | null>(null);
-  const [confirmDeleteLevel3Id, setConfirmDeleteLevel3Id] = useState<string | null>(null);
+  /** 删除目录弹框（侧栏与三级 tag 共用） */
+  const [deleteDirDialog, setDeleteDirDialog] = useState<{
+    directoryId: string;
+    name: string;
+    variant: 'sidebar' | 'level3';
+  } | null>(null);
+
+  /** 预计完成时间（datetime-local 草稿） */
+  const [expectedAtDialog, setExpectedAtDialog] = useState<{
+    itemId: string;
+    draftLocal: string;
+  } | null>(null);
+  const [expectedAtSaving, setExpectedAtSaving] = useState(false);
 
   // ── add directory ──────────────────────────────────────────────────────────
   const [isAddingDir, setIsAddingDir] = useState(false);
@@ -158,8 +173,6 @@ export function App() {
   const [completeFlipTick, setCompleteFlipTick] = useState(0);
   /** 有 FLIP 时需「接口成功 + 动画结束」再 loadItems，避免拉到旧状态 */
   const completeFlipSyncRef = useRef({ apiDone: false, animDone: false });
-  /** 三级删除进入「确认」后，需间隔一段时间才允许真正删除，避免双击第二次误触删除 */
-  const level3DeleteConfirmReadyAtRef = useRef(0);
 
   // ── filter menu ────────────────────────────────────────────────────────────
   const toggleFilterMenu = () => {
@@ -308,7 +321,8 @@ export function App() {
     setQuickTitle('');
     setModalItem(null);
     setCloseWarningActive(false);
-    setConfirmDeleteLevel3Id(null);
+    setDeleteDirDialog(null);
+    setExpectedAtDialog(null);
   }, [timeFilter, dirFilter]);
 
   // Esc
@@ -319,6 +333,24 @@ export function App() {
     if (modalItem) document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
   }, [modalItem]);
+
+  useEffect(() => {
+    if (!deleteDirDialog) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDeleteDirDialog(null);
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [deleteDirDialog]);
+
+  useEffect(() => {
+    if (!expectedAtDialog) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !expectedAtSaving) setExpectedAtDialog(null);
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [expectedAtDialog, expectedAtSaving]);
 
   // ── 筛选器点击交互 ──────────────────────────────────────────────────────────
   function handleTimeFilterClick(view: SmartViewKey) {
@@ -382,22 +414,6 @@ export function App() {
     const ok = level2SelectedNode.children.some((c) => c.id === level3DirId);
     if (!ok) setLevel3DirId(null);
   }, [level2SelectedNode, level3DirId]);
-
-  // 二级子列表变化后，若确认中的 id 已不存在（例如已删除），清除确认态，避免错位显示「确认」
-  useEffect(() => {
-    if (!confirmDeleteLevel3Id || !level2SelectedNode) return;
-    const ok = level2SelectedNode.children.some((c) => c.id === confirmDeleteLevel3Id);
-    if (!ok) setConfirmDeleteLevel3Id(null);
-  }, [level2SelectedNode, confirmDeleteLevel3Id]);
-
-  useEffect(() => {
-    if (!confirmDeleteLevel3Id || modalItem) return;
-    const onEsc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setConfirmDeleteLevel3Id(null);
-    };
-    document.addEventListener('keydown', onEsc);
-    return () => document.removeEventListener('keydown', onEsc);
-  }, [confirmDeleteLevel3Id, modalItem]);
 
   useEffect(() => {
     if (level3DirId) {
@@ -553,6 +569,35 @@ export function App() {
     }
   }
 
+  function openExpectedAtDialog(item: ItemSummary) {
+    const draft = item.expectedAt
+      ? isoToDatetimeLocalInputValue(item.expectedAt)
+      : isoToDatetimeLocalInputValue(new Date().toISOString());
+    setExpectedAtDialog({ itemId: item.id, draftLocal: draft });
+  }
+
+  async function handleSaveExpectedAt() {
+    if (!expectedAtDialog) return;
+    const { itemId, draftLocal } = expectedAtDialog;
+    if (draftLocal.trim() !== '' && datetimeLocalInputValueToIso(draftLocal) === null) {
+      setErrorMessage('请选择有效时间');
+      return;
+    }
+    const iso = datetimeLocalInputValueToIso(draftLocal);
+    try {
+      setExpectedAtSaving(true);
+      setErrorMessage(null);
+      const updated = await patchItem(itemId, { expectedAt: iso });
+      setExpectedAtDialog(null);
+      setModalItem((m) => (m?.id === updated.id ? updated : m));
+      await Promise.all([loadItems(timeFilter, effectiveDirFilter), refreshBootstrap()]);
+    } catch (e) {
+      setErrorMessage((e as Error).message || '更新失败');
+    } finally {
+      setExpectedAtSaving(false);
+    }
+  }
+
   // ── directory create handlers ──────────────────────────────────────────────
   function openAddDir() {
     setIsAddingDir(true);
@@ -608,27 +653,14 @@ export function App() {
     } catch (e) {
       setErrorMessage((e as Error).message || '删除目录失败');
     } finally {
-      setConfirmDeleteLevel3Id(null);
-      level3DeleteConfirmReadyAtRef.current = 0;
+      setDeleteDirDialog(null);
     }
-  }
-
-  function handleLevel3DeleteControl(e: React.SyntheticEvent, nodeId: string) {
-    e.stopPropagation();
-    if (confirmDeleteLevel3Id !== nodeId) {
-      setConfirmDeleteLevel3Id(nodeId);
-      level3DeleteConfirmReadyAtRef.current = Date.now() + 420;
-      return;
-    }
-    if (Date.now() < level3DeleteConfirmReadyAtRef.current) return;
-    void handleDeleteLevel3Dir(nodeId);
   }
 
   async function handleDeleteDir(dirId: string) {
     try {
       setErrorMessage(null);
       await deleteDirectory(dirId, 'move_to_inbox');
-      setConfirmDeleteDirId(null);
       if (
         dirFilter?.type === 'directory' &&
         (dirFilter.id === dirId || isInSubtree(dirFilter.id, dirId, bootstrap?.directories ?? []))
@@ -642,6 +674,18 @@ export function App() {
       }
     } catch (e) {
       setErrorMessage((e as Error).message || '删除目录失败');
+    } finally {
+      setDeleteDirDialog(null);
+    }
+  }
+
+  async function confirmDeleteDirectoryDialog() {
+    if (!deleteDirDialog) return;
+    const { directoryId, variant } = deleteDirDialog;
+    if (variant === 'level3') {
+      await handleDeleteLevel3Dir(directoryId);
+    } else {
+      await handleDeleteDir(directoryId);
     }
   }
 
@@ -656,15 +700,12 @@ export function App() {
       const isExpanded = expandedDirs.has(node.id);
       const showNestedInSidebar = node.level < SIDEBAR_MAX_LEVEL;
       const hasChildrenInSidebar = showNestedInSidebar && node.children.length > 0;
-      const isConfirming = confirmDeleteDirId === node.id;
-
       return (
         <li key={node.id}>
           <button
             type="button"
-            className={`nav-list__item${depth > 0 ? ' nav-list__item--child' : ''}${isActive ? ' is-active' : ''} nav-list__item--deletable${isConfirming ? ' is-confirming' : ''}`}
+            className={`nav-list__item${depth > 0 ? ' nav-list__item--child' : ''}${isActive ? ' is-active' : ''} nav-list__item--deletable`}
             onClick={() => handleDirFilterClick({ type: 'directory', id: node.id })}
-            onMouseLeave={() => setConfirmDeleteDirId(null)}
           >
             <span className="dir-root__label">
               {node.color && <span className="category-dot" style={{ background: node.color }} />}
@@ -676,23 +717,21 @@ export function App() {
             <span
               role="button"
               tabIndex={0}
-              className={`dir-delete-btn${isConfirming ? ' dir-delete-btn--confirm' : ''}`}
+              className="dir-delete-btn"
               onClick={(e) => {
                 e.stopPropagation();
-                isConfirming ? void handleDeleteDir(node.id) : setConfirmDeleteDirId(node.id);
+                setDeleteDirDialog({ directoryId: node.id, name: node.name, variant: 'sidebar' });
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   e.stopPropagation();
-                  isConfirming ? void handleDeleteDir(node.id) : setConfirmDeleteDirId(node.id);
+                  setDeleteDirDialog({ directoryId: node.id, name: node.name, variant: 'sidebar' });
                 }
               }}
             >
-              {isConfirming ? '确认' : (
-                <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M3 4h10M6 4V3h4v1M5 4l.5 8h5L11 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
-              )}
+              <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M3 4h10M6 4V3h4v1M5 4l.5 8h5L11 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
             </span>
           </button>
           {hasChildrenInSidebar && (
@@ -868,11 +907,10 @@ export function App() {
           <div className="dir-tag-row" role="toolbar" aria-label="三级目录">
             {level2SelectedNode.children.map((node) => {
               const isTagActive = level3DirId === node.id;
-              const isConfirmingL3 = confirmDeleteLevel3Id === node.id;
               return (
                 <div
                   key={node.id}
-                  className={`dir-tag-wrap dir-tag-wrap--deletable${isTagActive ? ' is-active' : ''}${isConfirmingL3 ? ' is-confirming' : ''}`}
+                  className={`dir-tag-wrap dir-tag-wrap--deletable${isTagActive ? ' is-active' : ''}`}
                 >
                   <button
                     type="button"
@@ -891,20 +929,21 @@ export function App() {
                   <span
                     role="button"
                     tabIndex={0}
-                    className={`dir-delete-btn${isConfirmingL3 ? ' dir-delete-btn--confirm' : ''}`}
-                    onClick={(e) => handleLevel3DeleteControl(e, node.id)}
+                    className="dir-delete-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDeleteDirDialog({ directoryId: node.id, name: node.name, variant: 'level3' });
+                    }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
                         e.stopPropagation();
-                        handleLevel3DeleteControl(e, node.id);
+                        setDeleteDirDialog({ directoryId: node.id, name: node.name, variant: 'level3' });
                       }
                     }}
                   >
-                    {isConfirmingL3 ? '确认' : (
-                      <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M3 4h10M6 4V3h4v1M5 4l.5 8h5L11 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    )}
+                    <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M3 4h10M6 4V3h4v1M5 4l.5 8h5L11 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
                   </span>
                 </div>
               );
@@ -974,6 +1013,31 @@ export function App() {
                       )}
                     </button>
                     <h3 className="card__title">{item.title}</h3>
+                    {item.expectedAt ? (
+                      <button
+                        type="button"
+                        className="card__expected-at"
+                        aria-label="修改预计完成时间"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openExpectedAtDialog(item);
+                        }}
+                      >
+                        {formatExpectedAtDisplay(item.expectedAt)}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="card__expected-at card__expected-at--placeholder"
+                        aria-label="添加预计完成时间"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openExpectedAtDialog(item);
+                        }}
+                      >
+                        添加时间
+                      </button>
+                    )}
                   </div>
                   {item.notes && <p className="card__excerpt">{item.notes}</p>}
                 </div>
@@ -994,6 +1058,85 @@ export function App() {
           onClose={() => setDirPicker(null)}
           onConfirm={(directoryId) => void handleAssignDirectoryFromPicker(dirPicker.itemId, directoryId)}
         />
+      ) : null}
+
+      {expectedAtDialog ? (
+        <div
+          className="delete-dir-overlay"
+          onClick={() => { if (!expectedAtSaving) setExpectedAtDialog(null); }}
+        >
+          <div
+            className="delete-dir-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="expected-at-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="expected-at-title" className="delete-dir-dialog__title">
+              预计完成时间
+            </h2>
+            <label className="expected-at-dialog__label" htmlFor="expected-at-input">
+              日期与时间
+            </label>
+            <input
+              id="expected-at-input"
+              className="expected-at-dialog__input"
+              type="datetime-local"
+              step={60}
+              value={expectedAtDialog.draftLocal}
+              onChange={(e) =>
+                setExpectedAtDialog((d) => (d ? { ...d, draftLocal: e.target.value } : null))
+              }
+              disabled={expectedAtSaving}
+            />
+            <div className="expected-at-dialog__actions">
+              <button
+                type="button"
+                className="delete-dir-dialog__cancel"
+                disabled={expectedAtSaving}
+                onClick={() => setExpectedAtDialog(null)}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="dir-cascade-picker__confirm"
+                disabled={expectedAtSaving}
+                onClick={() => void handleSaveExpectedAt()}
+              >
+                {expectedAtSaving ? '保存中…' : '保存'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {deleteDirDialog ? (
+        <div className="delete-dir-overlay" onClick={() => setDeleteDirDialog(null)}>
+          <div
+            className="delete-dir-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="delete-dir-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="delete-dir-title" className="delete-dir-dialog__title">
+              删除目录
+            </h2>
+            <p className="delete-dir-dialog__body">
+              确定删除「{deleteDirDialog.name}」吗？目录内任务将移至
+              {deleteDirDialog.variant === 'level3' ? '上级目录' : '未分类'}。
+            </p>
+            <div className="delete-dir-dialog__actions">
+              <button type="button" className="delete-dir-dialog__cancel" onClick={() => setDeleteDirDialog(null)}>
+                取消
+              </button>
+              <button type="button" className="delete-dir-dialog__danger" onClick={() => void confirmDeleteDirectoryDialog()}>
+                删除
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
 
       {modalItem && (

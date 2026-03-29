@@ -59,10 +59,11 @@ public class ViewService {
     public List<ViewItemResponse> upcoming() {
         String accountId = currentAccountService.ensureCurrentAccount().id();
         SettingsService.SettingsResponse settings = settingsService.getCurrentSettings();
-        Instant now = Instant.now();
-        Instant upperBound = now.plusSeconds(toSeconds(settings.recentRangeValue(), settings.recentRangeUnit()));
+        LocalDate today = LocalDate.now(APP_ZONE);
+        Instant windowStart = today.atStartOfDay(APP_ZONE).toInstant();
+        Instant upperBound = windowStart.plusSeconds(toSeconds(settings.recentRangeValue(), settings.recentRangeUnit()));
 
-        return viewRepository.upcoming(accountId, now.toString(), upperBound.toString())
+        return viewRepository.upcoming(accountId, windowStart.toString(), upperBound.toString())
                 .stream()
                 .map(this::toResponse)
                 .toList();
@@ -71,7 +72,9 @@ public class ViewService {
     @Transactional(readOnly = true)
     public List<ViewItemResponse> overdue() {
         String accountId = currentAccountService.ensureCurrentAccount().id();
-        return viewRepository.overdue(accountId, Instant.now().toString())
+        LocalDate today = LocalDate.now(APP_ZONE);
+        String beforeTodayStart = today.atStartOfDay(APP_ZONE).toInstant().toString();
+        return viewRepository.overdue(accountId, beforeTodayStart)
                 .stream()
                 .map(this::toResponse)
                 .toList();

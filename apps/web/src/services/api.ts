@@ -67,6 +67,8 @@ export async function patchItem(
     progress?: ItemProgress;
     /** 传 `null` 表示移入未分类（请求体发 `""`，与后端 normalize 一致） */
     directoryId?: string | null;
+    /** 传 `null` 或空串清除预计完成时间（请求体发 `""`） */
+    expectedAt?: string | null;
   },
 ) {
   const body: Record<string, unknown> = {};
@@ -75,6 +77,9 @@ export async function patchItem(
   if (payload.progress !== undefined) body.progress = payload.progress;
   if (payload.directoryId !== undefined) {
     body.directoryId = payload.directoryId === null ? '' : payload.directoryId;
+  }
+  if (payload.expectedAt !== undefined) {
+    body.expectedAt = payload.expectedAt === null || payload.expectedAt === '' ? '' : payload.expectedAt;
   }
   return requestJson<ItemSummary>(`/api/items/${itemId}`, {
     method: 'PATCH',
