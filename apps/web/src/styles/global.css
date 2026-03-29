@@ -180,14 +180,28 @@ button {
   margin-left: 3px;
 }
 
+.dir-children-wrapper {
+  display: grid;
+  grid-template-rows: 0fr;
+  margin-left: 14px;
+  border-left: 2px solid transparent;
+  transition: grid-template-rows 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+              border-color 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.dir-children-wrapper.is-expanded {
+  grid-template-rows: 1fr;
+  margin-top: 4px;
+  border-color: var(--md-sys-color-outline-variant);
+}
+
 .dir-children {
   list-style: none;
-  margin: 4px 0 0 14px;
-  padding: 0 0 0 12px;
+  overflow: hidden;
+  padding: 0 0 4px 12px;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  border-left: 2px solid var(--md-sys-color-outline-variant);
 }
 
 .nav-list__item--child {

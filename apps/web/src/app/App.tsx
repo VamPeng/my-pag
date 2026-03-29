@@ -423,10 +423,12 @@ export function App() {
               )}
             </span>
           </button>
-          {hasChildren && isExpanded && (
-            <ul className="dir-children">
-              {renderDirNodes(node.children, depth + 1)}
-            </ul>
+          {hasChildren && (
+            <div className={`dir-children-wrapper${isExpanded ? ' is-expanded' : ''}`}>
+              <ul className="dir-children">
+                {renderDirNodes(node.children, depth + 1)}
+              </ul>
+            </div>
           )}
         </li>
       );
