@@ -770,9 +770,10 @@ button {
 
 /* ── directory delete button ─────────────────────────────────────────────── */
 
-/* 删除按钮默认隐藏，计数默认显示 */
+/* 删除按钮默认不可见但占位，防止显隐时撑高行高 */
 .dir-delete-btn {
-  display: none;
+  display: flex;
+  visibility: hidden;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
@@ -793,7 +794,7 @@ button {
 
 /* 悬停时：显示删除按钮 */
 .nav-list__item--deletable:hover .dir-delete-btn {
-  display: flex;
+  visibility: visible;
 }
 
 .nav-list__item--deletable:hover .dir-delete-btn:hover {
@@ -803,7 +804,7 @@ button {
 
 /* 确认状态：不依赖 hover，始终显示确认按钮 */
 .nav-list__item.is-confirming .dir-delete-btn {
-  display: flex;
+  visibility: visible;
 }
 
 .dir-delete-btn--confirm {
