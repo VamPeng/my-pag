@@ -12,6 +12,7 @@ out/
 .env
 .env.*
 apps/server/data/
+apps/server/src/main/resources/static/
 *.tsbuildinfo
 .worktrees/
 .claude/

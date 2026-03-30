@@ -144,6 +144,19 @@ public class ItemRepository {
         return findById(accountId, id);
     }
 
+    public int countUnclassifiedActive(String accountId) {
+        Integer count = jdbcTemplate.queryForObject(
+                """
+                SELECT COUNT(*) FROM items
+                WHERE account_id = ? AND directory_id IS NULL
+                  AND trashed_at IS NULL AND progress != 'done'
+                """,
+                Integer.class,
+                accountId
+        );
+        return count == null ? 0 : count;
+    }
+
     private ItemRecord mapRow(java.sql.ResultSet rs, int rowNum) throws java.sql.SQLException {
         return new ItemRecord(
                 rs.getString("id"),

@@ -22,8 +22,15 @@ export interface DirectoryNode {
   parentId: string | null;
   name: string;
   sortOrder: number;
+  color: string | null;
+  activeCount: number;
+  level: number;
   children: DirectoryNode[];
 }
+
+export type DirFilter =
+  | { type: 'directory'; id: string }
+  | { type: 'unclassified' };
 
 export interface SettingsData {
   recentRangeValue: number;
@@ -38,6 +45,7 @@ export interface BootstrapData {
   };
   settings: SettingsData;
   directories: DirectoryNode[];
+  unclassifiedCount: number;
 }
 
 export const SMART_VIEW_LABELS: Record<SmartViewKey, string> = {
