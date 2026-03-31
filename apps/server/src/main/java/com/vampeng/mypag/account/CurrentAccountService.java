@@ -40,8 +40,19 @@ public class CurrentAccountService {
                     now,
                     now
             );
+        }
+
+        // Seed default directories if missing — handles both fresh DBs and older DBs that
+        // had an account created before directory seeding was added.
+        Integer dirCount = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM directories WHERE account_id = ? AND is_deleted = 0",
+                Integer.class,
+                DEFAULT_ACCOUNT_ID
+        );
+        if (dirCount == null || dirCount == 0) {
+            String now = Instant.now().toString();
             jdbcTemplate.update("""
-                    INSERT INTO directories
+                    INSERT OR IGNORE INTO directories
                       (id, account_id, parent_id, name, color, sort_order, is_deleted, created_at, updated_at)
                     VALUES
                       ('dir-todo',     ?, NULL, '待办', '#5a8a6a', 1, 0, ?, ?),
