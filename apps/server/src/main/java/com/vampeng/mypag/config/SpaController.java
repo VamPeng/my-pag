@@ -11,8 +11,8 @@ public class SpaController {
 
     @RequestMapping(value = {
             "/",
-            "/{path:^(?!api|health|actuator)[^\\.]*$}",
-            "/{path:^(?!api|health|actuator)[^\\.]*$}/**"
+            "/{path:^(?!api|health|actuator|assets)[^\\.]*$}",
+            "/{path:^(?!api|health|actuator|assets)[^\\.]*$}/{tail:^(?!.*\\.).*$}"
     })
     public String forward() {
         return "forward:/index.html";

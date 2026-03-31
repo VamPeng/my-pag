@@ -19,7 +19,7 @@ import {
 } from '../types/item';
 
 const VIEW_ORDER: SmartViewKey[] = ['today', 'upcoming', 'overdue'];
-const IS_MAC = navigator.platform.startsWith('Mac');
+const IS_MAC = globalThis.navigator?.platform?.startsWith('Mac') ?? false;
 
 const DIR_COLORS = [
   '#ef5350', '#ec407a', '#ab47bc', '#7e57c2',
